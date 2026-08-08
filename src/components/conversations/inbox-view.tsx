@@ -4,9 +4,23 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import { toast } from "sonner";
-import { Check, CheckCheck, Clock, Filter, Loader2, Send, X } from "lucide-react";
+import {
+  Check,
+  CheckCheck,
+  Clock,
+  Filter,
+  Loader2,
+  Send,
+  Ticket,
+  X,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { isWithinCustomerWindow } from "@/lib/utils";
+import {
+  PRIORITY_LABELS,
+  TICKET_PRIORITIES,
+  type TicketPriority,
+} from "@/lib/tickets";
 import { useRealtimeInbox } from "@/hooks/use-realtime-inbox";
 import {
   addConversationNote,
@@ -23,6 +37,13 @@ import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { EmojiPicker } from "@/components/conversations/emoji-picker";
 import { WhatsAppText } from "@/components/conversations/whatsapp-text";
 
@@ -124,7 +145,11 @@ export function InboxView({
   const [newPhone, setNewPhone] = useState("");
   const [newInboxId, setNewInboxId] = useState(inboxes[0]?.id ?? "");
   const [note, setNote] = useState("");
+  const [ticketOpen, setTicketOpen] = useState(false);
   const [ticketTitle, setTicketTitle] = useState("");
+  const [ticketDescription, setTicketDescription] = useState("");
+  const [ticketPriority, setTicketPriority] =
+    useState<TicketPriority>("medium");
   const [filterContactTagId, setFilterContactTagId] = useState("");
   const [assigneeFilter, setAssigneeFilter] =
     useState<AssigneeFilter>("all");
@@ -1141,36 +1166,15 @@ export function InboxView({
                 ))}
               </div>
 
-              <div className="space-y-2 border-t border-[var(--line)] pt-4">
-                <Label>Crear ticket</Label>
-                <Input
-                  value={ticketTitle}
-                  onChange={(e) => setTicketTitle(e.target.value)}
-                  placeholder="Título"
-                />
-                <Button
-                  className="w-full"
-                  disabled={!ticketTitle || pending}
-                  onClick={() =>
-                    startTransition(async () => {
-                      try {
-                        await createTicket({
-                          companyId: active.company_id,
-                          conversationId: active.id,
-                          title: ticketTitle,
-                        });
-                        setTicketTitle("");
-                        toast.success("Ticket creado");
-                      } catch (err) {
-                        toast.error(
-                          err instanceof Error ? err.message : "Error",
-                        );
-                      }
-                    })
-                  }
+              <div className="border-t border-[var(--line)] pt-4">
+                <button
+                  type="button"
+                  onClick={() => setTicketOpen(true)}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--line)] px-3 py-2 text-xs text-[var(--muted)] transition hover:border-[var(--accent)]/40 hover:bg-[var(--accent-soft)]/40 hover:text-[var(--ink)]"
                 >
-                  Crear ticket
-                </Button>
+                  <Ticket className="h-3.5 w-3.5" />
+                  Escalar a soporte
+                </button>
               </div>
             </div>
           ) : (
@@ -1180,6 +1184,115 @@ export function InboxView({
           )}
         </section>
       </div>
+
+      <Dialog
+        open={ticketOpen}
+        onOpenChange={(open) => {
+          setTicketOpen(open);
+          if (!open) {
+            setTicketTitle("");
+            setTicketDescription("");
+            setTicketPriority("medium");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Escalar a soporte</DialogTitle>
+            <DialogDescription>
+              Describe la incidencia. El ticket quedará en cola sin asignar.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="ticket-title">Título</Label>
+              <Input
+                id="ticket-title"
+                value={ticketTitle}
+                onChange={(e) => setTicketTitle(e.target.value)}
+                placeholder="Resumen breve de la incidencia"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ticket-description">Descripción</Label>
+              <Textarea
+                id="ticket-description"
+                value={ticketDescription}
+                onChange={(e) => setTicketDescription(e.target.value)}
+                placeholder="Detalle qué ocurrió, pasos y contexto útil para soporte"
+                rows={4}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ticket-priority">Prioridad</Label>
+              <Select
+                id="ticket-priority"
+                value={ticketPriority}
+                onChange={(e) =>
+                  setTicketPriority(e.target.value as TicketPriority)
+                }
+              >
+                {TICKET_PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {PRIORITY_LABELS[p]}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={pending}
+                onClick={() => setTicketOpen(false)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                disabled={
+                  pending ||
+                  !ticketTitle.trim() ||
+                  !ticketDescription.trim() ||
+                  !active
+                }
+                onClick={() => {
+                  if (!active) return;
+                  startTransition(async () => {
+                    try {
+                      await createTicket({
+                        companyId: active.company_id,
+                        conversationId: active.id,
+                        title: ticketTitle,
+                        description: ticketDescription,
+                        priority: ticketPriority,
+                      });
+                      setTicketOpen(false);
+                      setTicketTitle("");
+                      setTicketDescription("");
+                      setTicketPriority("medium");
+                      toast.success("Ticket creado", {
+                        action: {
+                          label: "Ver tickets",
+                          onClick: () => {
+                            window.location.href = "/tickets";
+                          },
+                        },
+                      });
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error ? err.message : "Error",
+                      );
+                    }
+                  });
+                }}
+              >
+                {pending ? "Creando…" : "Crear ticket"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

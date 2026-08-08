@@ -99,7 +99,7 @@ export async function createTicket(input: {
   companyId: string;
   conversationId: string;
   title: string;
-  description?: string;
+  description: string;
   priority?: string;
   assigneeId?: string | null;
 }) {
@@ -107,14 +107,24 @@ export async function createTicket(input: {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) throw new Error("unauthorized");
+  if (!user) throw new Error("No autenticado");
+
+  const title = input.title.trim();
+  const description = input.description.trim();
+  if (!title) throw new Error("El título es obligatorio");
+  if (!description) throw new Error("La descripción es obligatoria");
+
+  const priority = input.priority ?? "medium";
+  if (!["low", "medium", "high", "urgent"].includes(priority)) {
+    throw new Error("Prioridad inválida");
+  }
 
   const { error } = await supabase.from("tickets").insert({
     company_id: input.companyId,
     conversation_id: input.conversationId,
-    title: input.title,
-    description: input.description ?? null,
-    priority: input.priority ?? "medium",
+    title,
+    description,
+    priority,
     assignee_id: input.assigneeId ?? null,
     created_by: user.id,
   });
@@ -125,9 +135,77 @@ export async function createTicket(input: {
 
 export async function updateTicketStatus(ticketId: string, status: string) {
   const supabase = await createClient();
+  if (!["open", "in_progress", "resolved", "closed"].includes(status)) {
+    throw new Error("Estado inválido");
+  }
   const { error } = await supabase
     .from("tickets")
     .update({ status })
+    .eq("id", ticketId);
+  if (error) throw new Error(error.message);
+  revalidatePath("/tickets");
+}
+
+export async function updateTicketPriority(
+  ticketId: string,
+  priority: string,
+) {
+  const supabase = await createClient();
+  if (!["low", "medium", "high", "urgent"].includes(priority)) {
+    throw new Error("Prioridad inválida");
+  }
+  const { error } = await supabase
+    .from("tickets")
+    .update({ priority })
+    .eq("id", ticketId);
+  if (error) throw new Error(error.message);
+  revalidatePath("/tickets");
+}
+
+export async function updateTicketAssignee(
+  ticketId: string,
+  assigneeId: string | null,
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("No autenticado");
+
+  const { data: ticket, error: ticketError } = await supabase
+    .from("tickets")
+    .select("id, company_id")
+    .eq("id", ticketId)
+    .single();
+  if (ticketError || !ticket) throw new Error("Ticket no encontrado");
+
+  if (assigneeId) {
+    const { data: membership } = await supabase
+      .from("company_memberships")
+      .select(
+        `
+        id,
+        membership_roles!inner (
+          roles!inner ( name )
+        )
+      `,
+      )
+      .eq("user_id", assigneeId)
+      .eq("company_id", ticket.company_id)
+      .eq("is_active", true)
+      .eq("membership_roles.roles.name", "Soporte")
+      .maybeSingle();
+
+    if (!membership) {
+      throw new Error(
+        "Solo puedes asignar el ticket a un agente de Soporte de la misma empresa",
+      );
+    }
+  }
+
+  const { error } = await supabase
+    .from("tickets")
+    .update({ assignee_id: assigneeId })
     .eq("id", ticketId);
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
