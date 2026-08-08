@@ -127,3 +127,49 @@ export function sessionCompanyIds(session: AppSession) {
   if (session.isPlatformAdmin) return null; // all
   return session.memberships.map((m) => m.companyId);
 }
+
+function roleMatches(roleNames: string[], names: string[]) {
+  const lowered = roleNames.map((r) => r.toLowerCase());
+  return names.some((n) => lowered.includes(n.toLowerCase()));
+}
+
+/** Soporte / Admin de empresa / platform: cola completa, respuesta y reasignación. */
+export function sessionIsTicketSupportForCompany(
+  session: AppSession,
+  companyId: string,
+) {
+  if (session.isPlatformAdmin) return true;
+  const membership = session.memberships.find((m) => m.companyId === companyId);
+  if (!membership) return false;
+  return (
+    roleMatches(membership.roleNames, ["Soporte", "Admin"]) ||
+    membership.permissions.includes("users.manage")
+  );
+}
+
+export function sessionTicketSupportCompanyIds(session: AppSession): string[] {
+  if (session.isPlatformAdmin) {
+    return session.memberships.map((m) => m.companyId);
+  }
+  return session.memberships
+    .filter(
+      (m) =>
+        roleMatches(m.roleNames, ["Soporte", "Admin"]) ||
+        m.permissions.includes("users.manage"),
+    )
+    .map((m) => m.companyId);
+}
+
+/** True if the user can operate as support on at least one company. */
+export function sessionIsTicketSupport(session: AppSession) {
+  if (session.isPlatformAdmin) return true;
+  return sessionTicketSupportCompanyIds(session).length > 0;
+}
+
+export function sessionCanEditTicketContentForCompany(
+  session: AppSession,
+  companyId: string,
+) {
+  if (session.isPlatformAdmin) return true;
+  return sessionHasPermission(session, companyId, "tickets.manage");
+}

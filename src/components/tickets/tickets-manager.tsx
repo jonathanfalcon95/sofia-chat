@@ -5,12 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
-import { ExternalLink, Ticket } from "lucide-react";
+import { ExternalLink, Pencil, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import {
   updateTicketAssignee,
-  updateTicketPriority,
+  updateTicketContent,
   updateTicketStatus,
+  updateTicketSupportResponse,
 } from "@/app/actions/conversations";
 import {
   PRIORITY_LABELS,
@@ -22,9 +23,20 @@ import {
   type TicketStatus,
 } from "@/lib/tickets";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 type SupportAgent = {
@@ -45,9 +57,12 @@ type TicketRow = {
   assignee_id: string | null;
   created_by: string;
   created_at: string;
+  support_response: string | null;
+  support_responded_at: string | null;
   company_name: string;
   assignee: { full_name: string | null; email: string } | null;
   creator: { full_name: string | null; email: string } | null;
+  responder: { full_name: string | null; email: string } | null;
   contact: { name: string | null; phone_number: string } | null;
 };
 
@@ -57,10 +72,15 @@ export function TicketsManager({
   tickets,
   supportAgents,
   currentUserId,
+  supportCompanyIds,
+  isSupportViewer,
 }: {
   tickets: TicketRow[];
   supportAgents: SupportAgent[];
   currentUserId: string;
+  /** null = platform admin (all companies). */
+  supportCompanyIds: string[] | null;
+  isSupportViewer: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -68,6 +88,22 @@ export function TicketsManager({
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] =
     useState<AssigneeFilter>("all");
+  const [editing, setEditing] = useState<TicketRow | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editPriority, setEditPriority] =
+    useState<TicketPriority>("medium");
+  const [editResponse, setEditResponse] = useState("");
+
+  function canSupportTicket(companyId: string) {
+    if (supportCompanyIds === null) return true;
+    return supportCompanyIds.includes(companyId);
+  }
+
+  function canEditContent(ticket: TicketRow) {
+    if (canSupportTicket(ticket.company_id)) return true;
+    return ticket.created_by === currentUserId;
+  }
 
   const filtered = useMemo(() => {
     return tickets.filter((t) => {
@@ -85,11 +121,23 @@ export function TicketsManager({
     return supportAgents.filter((a) => a.company_id === companyId);
   }
 
+  function openEdit(ticket: TicketRow) {
+    setEditing(ticket);
+    setEditTitle(ticket.title);
+    setEditDescription(ticket.description ?? "");
+    setEditPriority((ticket.priority as TicketPriority) || "medium");
+    setEditResponse(ticket.support_response ?? "");
+  }
+
   return (
     <div>
       <PageHeader
         title="Tickets"
-        description="Incidencias escaladas a soporte, vinculadas a conversaciones"
+        description={
+          isSupportViewer
+            ? "Cola de soporte: responde, cambia estado y reasigna"
+            : "Tus incidencias escaladas. Puedes editar el contenido, no la asignación"
+        }
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -119,29 +167,31 @@ export function TicketsManager({
             </option>
           ))}
         </Select>
-        <div className="flex rounded-lg border border-[var(--line)] p-0.5 text-xs">
-          {(
-            [
-              ["all", "Todas"],
-              ["mine", "Mías"],
-              ["unassigned", "Sin asignar"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setAssigneeFilter(value)}
-              className={cn(
-                "rounded-md px-2.5 py-1.5 transition",
-                assigneeFilter === value
-                  ? "bg-[var(--accent-soft)] font-medium text-[var(--ink)]"
-                  : "text-[var(--muted)] hover:text-[var(--ink)]",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {isSupportViewer ? (
+          <div className="flex rounded-lg border border-[var(--line)] p-0.5 text-xs">
+            {(
+              [
+                ["all", "Todas"],
+                ["mine", "Mías"],
+                ["unassigned", "Sin asignar"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setAssigneeFilter(value)}
+                className={cn(
+                  "rounded-md px-2.5 py-1.5 transition",
+                  assigneeFilter === value
+                    ? "bg-[var(--accent-soft)] font-medium text-[var(--ink)]"
+                    : "text-[var(--muted)] hover:text-[var(--ink)]",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {filtered.length === 0 ? (
@@ -166,149 +216,308 @@ export function TicketsManager({
                 <TH>Prioridad</TH>
                 <TH>Estado</TH>
                 <TH>Asignado</TH>
+                <TH>Respuesta</TH>
                 <TH>Creado</TH>
+                <TH></TH>
               </TR>
             </THead>
             <TBody>
-              {filtered.map((t) => (
-                <TR key={t.id}>
-                  <TD className="min-w-[200px] max-w-[280px]">
-                    <div className="font-medium">{t.title}</div>
-                    {t.description ? (
-                      <div className="mt-0.5 line-clamp-2 text-xs text-[var(--muted)]">
-                        {t.description}
+              {filtered.map((t) => {
+                const support = canSupportTicket(t.company_id);
+                return (
+                  <TR key={t.id}>
+                    <TD className="min-w-[200px] max-w-[280px]">
+                      <div className="font-medium">{t.title}</div>
+                      {t.description ? (
+                        <div className="mt-0.5 line-clamp-2 text-xs text-[var(--muted)]">
+                          {t.description}
+                        </div>
+                      ) : null}
+                    </TD>
+                    <TD className="min-w-[140px]">
+                      <div className="text-sm">
+                        {t.contact?.name || "Sin nombre"}
                       </div>
-                    ) : null}
-                  </TD>
-                  <TD className="min-w-[140px]">
-                    <div className="text-sm">
-                      {t.contact?.name || "Sin nombre"}
-                    </div>
-                    {t.contact?.phone_number ? (
-                      <div className="text-xs text-[var(--muted)]">
-                        {t.contact.phone_number}
-                      </div>
-                    ) : null}
-                  </TD>
-                  <TD>
-                    <Link
-                      href={`/conversations/${t.conversation_id}`}
-                      className="inline-flex items-center gap-1 text-sm text-[var(--accent)] hover:underline"
-                    >
-                      Abrir chat
-                      <ExternalLink className="h-3 w-3" />
-                    </Link>
-                  </TD>
-                  <TD>{t.company_name}</TD>
-                  <TD>
-                    <div className="flex flex-col gap-1.5">
+                      {t.contact?.phone_number ? (
+                        <div className="text-xs text-[var(--muted)]">
+                          {t.contact.phone_number}
+                        </div>
+                      ) : null}
+                    </TD>
+                    <TD>
+                      <Link
+                        href={`/conversations/${t.conversation_id}`}
+                        className="inline-flex items-center gap-1 text-sm text-[var(--accent)] hover:underline"
+                      >
+                        Abrir chat
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </TD>
+                    <TD>{t.company_name}</TD>
+                    <TD>
                       <Badge className={priorityBadgeClass(t.priority)}>
                         {PRIORITY_LABELS[t.priority as TicketPriority] ??
                           t.priority}
                       </Badge>
-                      <Select
-                        defaultValue={t.priority}
-                        disabled={pending}
-                        className="h-8 min-w-[110px] text-xs"
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          startTransition(async () => {
-                            try {
-                              await updateTicketPriority(t.id, value);
-                              toast.success("Prioridad actualizada");
-                              router.refresh();
-                            } catch (err) {
-                              toast.error(
-                                err instanceof Error ? err.message : "Error",
-                              );
-                            }
-                          });
-                        }}
-                      >
-                        {TICKET_PRIORITIES.map((p) => (
-                          <option key={p} value={p}>
-                            {PRIORITY_LABELS[p]}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                  </TD>
-                  <TD>
-                    <Select
-                      defaultValue={t.status}
-                      disabled={pending}
-                      className="min-w-[130px] text-xs"
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        startTransition(async () => {
-                          try {
-                            await updateTicketStatus(t.id, value);
-                            toast.success("Estado actualizado");
-                            router.refresh();
-                          } catch (err) {
-                            toast.error(
-                              err instanceof Error ? err.message : "Error",
-                            );
-                          }
-                        });
-                      }}
-                    >
-                      {TICKET_STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {STATUS_LABELS[s as TicketStatus]}
-                        </option>
-                      ))}
-                    </Select>
-                  </TD>
-                  <TD>
-                    <Select
-                      defaultValue={t.assignee_id ?? ""}
-                      disabled={pending}
-                      className="min-w-[150px] text-xs"
-                      onChange={(e) => {
-                        const value = e.target.value || null;
-                        startTransition(async () => {
-                          try {
-                            await updateTicketAssignee(t.id, value);
-                            toast.success(
-                              value
-                                ? "Ticket asignado"
-                                : "Ticket sin asignar",
-                            );
-                            router.refresh();
-                          } catch (err) {
-                            toast.error(
-                              err instanceof Error ? err.message : "Error",
-                            );
-                          }
-                        });
-                      }}
-                    >
-                      <option value="">Sin asignar</option>
-                      {agentsForCompany(t.company_id).map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.full_name || a.email}
-                        </option>
-                      ))}
-                    </Select>
-                  </TD>
-                  <TD className="min-w-[120px]">
-                    <div className="text-xs">
-                      {t.creator?.full_name || t.creator?.email || "—"}
-                    </div>
-                    <div className="text-[10px] text-[var(--muted)]">
-                      {formatDistanceToNow(new Date(t.created_at), {
-                        addSuffix: true,
-                        locale: es,
-                      })}
-                    </div>
-                  </TD>
-                </TR>
-              ))}
+                    </TD>
+                    <TD>
+                      {support ? (
+                        <Select
+                          defaultValue={t.status}
+                          disabled={pending}
+                          className="min-w-[130px] text-xs"
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            startTransition(async () => {
+                              try {
+                                await updateTicketStatus(t.id, value);
+                                toast.success("Estado actualizado");
+                                router.refresh();
+                              } catch (err) {
+                                toast.error(
+                                  err instanceof Error ? err.message : "Error",
+                                );
+                              }
+                            });
+                          }}
+                        >
+                          {TICKET_STATUSES.map((s) => (
+                            <option key={s} value={s}>
+                              {STATUS_LABELS[s as TicketStatus]}
+                            </option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <span className="text-sm">
+                          {STATUS_LABELS[t.status as TicketStatus] ?? t.status}
+                        </span>
+                      )}
+                    </TD>
+                    <TD>
+                      {support ? (
+                        <Select
+                          defaultValue={t.assignee_id ?? ""}
+                          disabled={pending}
+                          className="min-w-[150px] text-xs"
+                          onChange={(e) => {
+                            const value = e.target.value || null;
+                            startTransition(async () => {
+                              try {
+                                await updateTicketAssignee(t.id, value);
+                                toast.success(
+                                  value
+                                    ? "Ticket asignado"
+                                    : "Ticket sin asignar",
+                                );
+                                router.refresh();
+                              } catch (err) {
+                                toast.error(
+                                  err instanceof Error ? err.message : "Error",
+                                );
+                              }
+                            });
+                          }}
+                        >
+                          <option value="">Sin asignar</option>
+                          {agentsForCompany(t.company_id).map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.full_name || a.email}
+                            </option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <span className="text-sm text-[var(--muted)]">
+                          {t.assignee?.full_name ||
+                            t.assignee?.email ||
+                            "Sin asignar"}
+                        </span>
+                      )}
+                    </TD>
+                    <TD className="min-w-[160px] max-w-[220px]">
+                      {t.support_response ? (
+                        <div>
+                          <div className="line-clamp-2 text-xs">
+                            {t.support_response}
+                          </div>
+                          {t.responder ? (
+                            <div className="mt-0.5 text-[10px] text-[var(--muted)]">
+                              {t.responder.full_name || t.responder.email}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-[var(--muted)]">
+                          Sin respuesta
+                        </span>
+                      )}
+                    </TD>
+                    <TD className="min-w-[120px]">
+                      <div className="text-xs">
+                        {t.creator?.full_name || t.creator?.email || "—"}
+                      </div>
+                      <div className="text-[10px] text-[var(--muted)]">
+                        {formatDistanceToNow(new Date(t.created_at), {
+                          addSuffix: true,
+                          locale: es,
+                        })}
+                      </div>
+                    </TD>
+                    <TD>
+                      {canEditContent(t) || support ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => openEdit(t)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          {support ? "Gestionar" : "Editar"}
+                        </Button>
+                      ) : null}
+                    </TD>
+                  </TR>
+                );
+              })}
             </TBody>
           </Table>
         </div>
       )}
+
+      <Dialog
+        open={Boolean(editing)}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          {editing ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {canSupportTicket(editing.company_id)
+                    ? "Gestionar ticket"
+                    : "Editar ticket"}
+                </DialogTitle>
+                <DialogDescription>
+                  {canSupportTicket(editing.company_id)
+                    ? "Puedes responder, reasignar y actualizar el estado desde la tabla."
+                    : "Puedes modificar el contenido. La asignación la define soporte."}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-title">Título</Label>
+                  <Input
+                    id="edit-title"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    disabled={!canEditContent(editing)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-description">Descripción</Label>
+                  <Textarea
+                    id="edit-description"
+                    rows={4}
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    disabled={!canEditContent(editing)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-priority">Prioridad</Label>
+                  <Select
+                    id="edit-priority"
+                    value={editPriority}
+                    onChange={(e) =>
+                      setEditPriority(e.target.value as TicketPriority)
+                    }
+                    disabled={!canEditContent(editing)}
+                  >
+                    {TICKET_PRIORITIES.map((p) => (
+                      <option key={p} value={p}>
+                        {PRIORITY_LABELS[p]}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                {!canSupportTicket(editing.company_id) ? (
+                  <p className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--muted)]">
+                    Asignado a:{" "}
+                    <span className="text-[var(--ink)]">
+                      {editing.assignee?.full_name ||
+                        editing.assignee?.email ||
+                        "Sin asignar (cola de soporte)"}
+                    </span>
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit-response">Respuesta de soporte</Label>
+                    <Textarea
+                      id="edit-response"
+                      rows={4}
+                      value={editResponse}
+                      onChange={(e) => setEditResponse(e.target.value)}
+                      placeholder="Escribe la respuesta o resolución para el agente…"
+                    />
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={pending}
+                    onClick={() => setEditing(null)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={
+                      pending || !editTitle.trim() || !editDescription.trim()
+                    }
+                    onClick={() => {
+                      const ticket = editing;
+                      startTransition(async () => {
+                        try {
+                          if (canEditContent(ticket)) {
+                            await updateTicketContent(ticket.id, {
+                              title: editTitle,
+                              description: editDescription,
+                              priority: editPriority,
+                            });
+                          }
+                          if (
+                            canSupportTicket(ticket.company_id) &&
+                            editResponse.trim()
+                          ) {
+                            await updateTicketSupportResponse(
+                              ticket.id,
+                              editResponse,
+                            );
+                          }
+                          toast.success("Ticket actualizado");
+                          setEditing(null);
+                          router.refresh();
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error ? err.message : "Error",
+                          );
+                        }
+                      });
+                    }}
+                  >
+                    {pending ? "Guardando…" : "Guardar"}
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

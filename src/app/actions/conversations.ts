@@ -2,6 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import {
+  getAppSession,
+  sessionCanEditTicketContentForCompany,
+  sessionIsTicketSupportForCompany,
+} from "@/lib/rbac/session";
 
 export async function assignConversation(
   conversationId: string,
@@ -101,14 +106,14 @@ export async function createTicket(input: {
   title: string;
   description: string;
   priority?: string;
-  assigneeId?: string | null;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("No autenticado");
+  const session = await getAppSession();
+  if (!session) throw new Error("No autenticado");
+  if (!sessionCanEditTicketContentForCompany(session, input.companyId)) {
+    throw new Error("No tienes permiso para crear tickets");
+  }
 
+  const supabase = await createClient();
   const title = input.title.trim();
   const description = input.description.trim();
   if (!title) throw new Error("El título es obligatorio");
@@ -119,44 +124,90 @@ export async function createTicket(input: {
     throw new Error("Prioridad inválida");
   }
 
+  // Agents escalate to the support queue — never assign from create.
   const { error } = await supabase.from("tickets").insert({
     company_id: input.companyId,
     conversation_id: input.conversationId,
     title,
     description,
     priority,
-    assignee_id: input.assigneeId ?? null,
-    created_by: user.id,
+    assignee_id: null,
+    created_by: session.userId,
   });
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
   revalidatePath(`/conversations/${input.conversationId}`);
 }
 
-export async function updateTicketStatus(ticketId: string, status: string) {
+async function getTicketOrThrow(ticketId: string) {
   const supabase = await createClient();
-  if (!["open", "in_progress", "resolved", "closed"].includes(status)) {
-    throw new Error("Estado inválido");
+  const { data: ticket, error } = await supabase
+    .from("tickets")
+    .select("id, company_id, created_by, conversation_id")
+    .eq("id", ticketId)
+    .single();
+  if (error || !ticket) throw new Error("Ticket no encontrado");
+  return ticket;
+}
+
+/** Agente (o quien tenga tickets.manage): edita título, descripción y prioridad. */
+export async function updateTicketContent(
+  ticketId: string,
+  input: { title: string; description: string; priority: string },
+) {
+  const session = await getAppSession();
+  if (!session) throw new Error("No autenticado");
+
+  const ticket = await getTicketOrThrow(ticketId);
+  if (!sessionCanEditTicketContentForCompany(session, ticket.company_id)) {
+    throw new Error("No tienes permiso para editar este ticket");
   }
+
+  const isSupport = sessionIsTicketSupportForCompany(
+    session,
+    ticket.company_id,
+  );
+  if (!isSupport && ticket.created_by !== session.userId) {
+    throw new Error("Solo puedes editar tickets que creaste");
+  }
+
+  const title = input.title.trim();
+  const description = input.description.trim();
+  if (!title) throw new Error("El título es obligatorio");
+  if (!description) throw new Error("La descripción es obligatoria");
+  if (!["low", "medium", "high", "urgent"].includes(input.priority)) {
+    throw new Error("Prioridad inválida");
+  }
+
+  const supabase = await createClient();
   const { error } = await supabase
     .from("tickets")
-    .update({ status })
+    .update({
+      title,
+      description,
+      priority: input.priority,
+    })
     .eq("id", ticketId);
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
 }
 
-export async function updateTicketPriority(
-  ticketId: string,
-  priority: string,
-) {
-  const supabase = await createClient();
-  if (!["low", "medium", "high", "urgent"].includes(priority)) {
-    throw new Error("Prioridad inválida");
+export async function updateTicketStatus(ticketId: string, status: string) {
+  const session = await getAppSession();
+  if (!session) throw new Error("No autenticado");
+  if (!["open", "in_progress", "resolved", "closed"].includes(status)) {
+    throw new Error("Estado inválido");
   }
+
+  const ticket = await getTicketOrThrow(ticketId);
+  if (!sessionIsTicketSupportForCompany(session, ticket.company_id)) {
+    throw new Error("Solo soporte puede cambiar el estado del ticket");
+  }
+
+  const supabase = await createClient();
   const { error } = await supabase
     .from("tickets")
-    .update({ priority })
+    .update({ status })
     .eq("id", ticketId);
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
@@ -166,19 +217,15 @@ export async function updateTicketAssignee(
   ticketId: string,
   assigneeId: string | null,
 ) {
+  const session = await getAppSession();
+  if (!session) throw new Error("No autenticado");
+
+  const ticket = await getTicketOrThrow(ticketId);
+  if (!sessionIsTicketSupportForCompany(session, ticket.company_id)) {
+    throw new Error("Solo soporte puede asignar tickets");
+  }
+
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("No autenticado");
-
-  const { data: ticket, error: ticketError } = await supabase
-    .from("tickets")
-    .select("id, company_id")
-    .eq("id", ticketId)
-    .single();
-  if (ticketError || !ticket) throw new Error("Ticket no encontrado");
-
   if (assigneeId) {
     const { data: membership } = await supabase
       .from("company_memberships")
@@ -206,6 +253,35 @@ export async function updateTicketAssignee(
   const { error } = await supabase
     .from("tickets")
     .update({ assignee_id: assigneeId })
+    .eq("id", ticketId);
+  if (error) throw new Error(error.message);
+  revalidatePath("/tickets");
+}
+
+/** Soporte: respuesta / resolución del ticket. */
+export async function updateTicketSupportResponse(
+  ticketId: string,
+  response: string,
+) {
+  const session = await getAppSession();
+  if (!session) throw new Error("No autenticado");
+
+  const ticket = await getTicketOrThrow(ticketId);
+  if (!sessionIsTicketSupportForCompany(session, ticket.company_id)) {
+    throw new Error("Solo soporte puede responder tickets");
+  }
+
+  const body = response.trim();
+  if (!body) throw new Error("La respuesta no puede estar vacía");
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("tickets")
+    .update({
+      support_response: body,
+      support_responded_at: new Date().toISOString(),
+      support_responded_by: session.userId,
+    })
     .eq("id", ticketId);
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
