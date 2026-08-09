@@ -44,6 +44,7 @@ export function EmojiPicker({
         size="icon"
         disabled={disabled}
         aria-label="Emojis"
+        className="h-9 w-9 shrink-0 rounded-full border-0 text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]"
         onClick={() => setOpen((v) => !v)}
       >
         <Smile className="h-4 w-4" />

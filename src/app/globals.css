@@ -147,6 +147,57 @@ button {
   border-top-left-radius: 4px;
 }
 
+.chat-thread {
+  background:
+    radial-gradient(circle at 20% 10%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 40%),
+    radial-gradient(circle at 80% 90%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 35%),
+    var(--surface-2);
+}
+
+.chat-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  background: var(--surface);
+  padding: 0.4rem 0.45rem 0.4rem 0.35rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.chat-composer-input {
+  flex: 1;
+  min-height: 2.25rem;
+  max-height: 8.5rem;
+  resize: none;
+  overflow-y: auto;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0.55rem 0.35rem !important;
+  line-height: 1.4;
+  font-size: 0.9375rem;
+}
+
+.chat-composer-input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.chat-composer-send {
+  flex-shrink: 0;
+  height: 2.35rem;
+  width: 2.35rem;
+  border-radius: 999px;
+}
+
 .wa-text strong {
   font-weight: 700;
 }

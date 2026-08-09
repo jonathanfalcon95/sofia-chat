@@ -202,6 +202,13 @@ export function InboxView({
     phoneSearch,
   ]);
 
+  function resizeComposer() {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 36), 136)}px`;
+  }
+
   function insertEmoji(emoji: string) {
     const el = composerRef.current;
     if (!el) {
@@ -216,6 +223,7 @@ export function InboxView({
       el.focus();
       const pos = start + emoji.length;
       el.setSelectionRange(pos, pos);
+      resizeComposer();
     });
   }
 
@@ -433,6 +441,7 @@ export function InboxView({
 
     setText("");
     focusComposer();
+    requestAnimationFrame(() => resizeComposer());
 
     const optimistic: MessageRow = {
       id: tempId,
@@ -727,7 +736,7 @@ export function InboxView({
 
               <div
                 ref={messagesScrollRef}
-                className="flex-1 space-y-3 overflow-auto p-4"
+                className="chat-thread flex-1 space-y-2.5 overflow-auto p-4"
               >
                 {loadingThread ? (
                   <>
@@ -776,38 +785,51 @@ export function InboxView({
                 )}
               </div>
 
-              <footer className="space-y-2 border-t border-[var(--line)] p-4">
+              <footer className="border-t border-[var(--line)] bg-[var(--surface)] px-3 py-3 sm:px-4">
                 {!canText ? (
-                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                  <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
                     {windowHint}. WhatsApp solo permite mensajes libres dentro
                     de las 24h desde el último mensaje entrante del contacto.
                   </div>
                 ) : null}
-                <div className="flex items-start gap-2">
+                <div
+                  className={`chat-composer ${!canText ? "opacity-60" : ""}`}
+                >
                   <EmojiPicker disabled={!canText} onPick={insertEmoji} />
                   <Textarea
                     ref={composerRef}
-                    className="flex-1"
-                    rows={3}
+                    className="chat-composer-input"
+                    rows={1}
                     placeholder={
                       canText
-                        ? "Escribe un mensaje... (Enter envía, Shift+Enter salto de línea)"
+                        ? "Escribe un mensaje"
                         : "Chat bloqueado hasta que el contacto escriba"
                     }
                     value={text}
-                    onChange={(e) => setText(e.target.value)}
+                    onChange={(e) => {
+                      setText(e.target.value);
+                      requestAnimationFrame(() => resizeComposer());
+                    }}
                     onKeyDown={handleComposerKeyDown}
                     disabled={!canText}
                   />
-                </div>
-                <div className="flex justify-end">
                   <Button
+                    type="button"
+                    size="icon"
+                    className="chat-composer-send"
                     onClick={() => sendTextOptimistic()}
                     disabled={!canText || !text.trim()}
+                    aria-label="Enviar mensaje"
+                    title="Enviar (Enter)"
                   >
-                    <Send className="h-4 w-4" /> Enviar
+                    <Send className="h-4 w-4" />
                   </Button>
                 </div>
+                {canText ? (
+                  <p className="mt-1.5 px-1 text-[10px] text-[var(--muted)]">
+                    Enter envía · Shift+Enter salto de línea
+                  </p>
+                ) : null}
               </footer>
             </>
           ) : (
