@@ -858,7 +858,7 @@ export function InboxView({
                   ))}
                 </Select>
                 <p className="text-[11px] text-[var(--muted)]">
-                  Solo agentes de esta empresa
+                  Solo usuarios con rol Agente de esta empresa
                 </p>
               </div>
 

@@ -28,14 +28,22 @@ export async function assignConversation(
   if (assigneeId) {
     const { data: membership } = await supabase
       .from("company_memberships")
-      .select("id")
+      .select(
+        `
+        id,
+        membership_roles!inner (
+          roles!inner ( name )
+        )
+      `,
+      )
       .eq("user_id", assigneeId)
       .eq("company_id", conversation.company_id)
       .eq("is_active", true)
+      .eq("membership_roles.roles.name", "Agente")
       .maybeSingle();
     if (!membership) {
       throw new Error(
-        "Solo puedes asignar a agentes de la misma empresa de la conversación",
+        "Solo puedes asignar la conversación a un agente de la misma empresa",
       );
     }
   }

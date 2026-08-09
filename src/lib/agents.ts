@@ -7,19 +7,30 @@ export type CompanyAgent = {
   company_id: string;
 };
 
-/** Active company members that can be assigned chats (same company scope). */
-export async function listCompanyAgents(): Promise<CompanyAgent[]> {
+/** Active members with role name "Agente" (chat assignees). */
+export async function listCompanyAgents(
+  companyId?: string,
+): Promise<CompanyAgent[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from("company_memberships")
     .select(
       `
       company_id,
-      profiles ( id, full_name, email )
+      profiles ( id, full_name, email ),
+      membership_roles!inner (
+        roles!inner ( name )
+      )
     `,
     )
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .eq("membership_roles.roles.name", "Agente");
 
+  if (companyId) {
+    query = query.eq("company_id", companyId);
+  }
+
+  const { data, error } = await query;
   if (error || !data) return [];
 
   const agents: CompanyAgent[] = [];
