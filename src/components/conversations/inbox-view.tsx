@@ -10,6 +10,7 @@ import {
   Clock,
   Filter,
   Loader2,
+  Search,
   Send,
   Ticket,
   X,
@@ -151,6 +152,7 @@ export function InboxView({
   const [ticketPriority, setTicketPriority] =
     useState<TicketPriority>("medium");
   const [filterContactTagId, setFilterContactTagId] = useState("");
+  const [phoneSearch, setPhoneSearch] = useState("");
   const [assigneeFilter, setAssigneeFilter] =
     useState<AssigneeFilter>("all");
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
@@ -169,6 +171,9 @@ export function InboxView({
   }, [agents, active]);
 
   const filteredConversations = useMemo(() => {
+    const query = phoneSearch.trim().toLowerCase();
+    const digits = phoneSearch.replace(/\D/g, "");
+
     return conversations.filter((c) => {
       if (
         filterContactTagId &&
@@ -177,11 +182,22 @@ export function InboxView({
         return false;
       }
       if (assigneeFilter === "mine") {
-        return Boolean(currentUserId && c.assignee_id === currentUserId);
+        if (!(currentUserId && c.assignee_id === currentUserId)) return false;
+      } else if (assigneeFilter === "unassigned") {
+        if (c.assignee_id) return false;
       }
-      if (assigneeFilter === "unassigned") {
-        return !c.assignee_id;
+
+      if (query || digits) {
+        const name = (c.contacts?.name || "").toLowerCase();
+        const phone = c.contacts?.phone_number || "";
+        const phoneDigits = phone.replace(/\D/g, "");
+        const nameMatch = query ? name.includes(query) : false;
+        const phoneMatch = digits
+          ? phoneDigits.includes(digits) || phone.toLowerCase().includes(query)
+          : phone.toLowerCase().includes(query);
+        if (!nameMatch && !phoneMatch) return false;
       }
+
       return true;
     });
   }, [
@@ -189,6 +205,7 @@ export function InboxView({
     filterContactTagId,
     assigneeFilter,
     currentUserId,
+    phoneSearch,
   ]);
 
   function insertEmoji(emoji: string) {
@@ -597,6 +614,26 @@ export function InboxView({
                 </button>
               ))}
             </div>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" />
+              <Input
+                value={phoneSearch}
+                onChange={(e) => setPhoneSearch(e.target.value)}
+                placeholder="Buscar por teléfono o nombre..."
+                className="pl-8 pr-8"
+                aria-label="Buscar conversaciones"
+              />
+              {phoneSearch ? (
+                <button
+                  type="button"
+                  onClick={() => setPhoneSearch("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted)] hover:text-[var(--ink)]"
+                  aria-label="Limpiar búsqueda"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
             {filterContactTagId ? (
               <div className="flex flex-wrap gap-1">
                 {contactTags
@@ -619,6 +656,9 @@ export function InboxView({
                   ))}
               </div>
             ) : null}
+            <p className="pt-1 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
+              Iniciar conversación
+            </p>
             <Select
               value={newInboxId}
               onChange={(e) => setNewInboxId(e.target.value)}
@@ -630,7 +670,7 @@ export function InboxView({
               ))}
             </Select>
             <Input
-              placeholder="Teléfono +58..."
+              placeholder="Teléfono destino +58..."
               value={newPhone}
               onChange={(e) => setNewPhone(e.target.value)}
             />
@@ -687,7 +727,9 @@ export function InboxView({
           <div className="flex-1 overflow-auto">
             {filteredConversations.length === 0 ? (
               <div className="p-6 text-sm text-[var(--muted)]">
-                Sin conversaciones aún
+                {phoneSearch.trim()
+                  ? "Ninguna conversación coincide con la búsqueda"
+                  : "Sin conversaciones aún"}
               </div>
             ) : (
               filteredConversations.map((c) => {
