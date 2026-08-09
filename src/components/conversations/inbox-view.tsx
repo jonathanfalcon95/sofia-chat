@@ -164,10 +164,8 @@ export function InboxView({
   const [mediaSending, setMediaSending] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const seededIdRef = useRef<string | null>(selectedId ?? null);
-  const loadedThreadIdRef = useRef<string | null>(
-    selectedId && initialMessages.length > 0 ? selectedId : null,
-  );
+  const loadedThreadIdRef = useRef<string | null>(null);
+  const appliedSelectedIdRef = useRef<string | null>(null);
   const desktopRedirectRef = useRef(false);
 
   const active = useMemo(
@@ -354,21 +352,24 @@ export function InboxView({
   useEffect(() => {
     if (!activeId) return;
 
-    // SSR-seeded thread for /conversations/[id]
-    if (seededIdRef.current === activeId && selectedId === activeId) {
-      setMessages(initialMessages);
-      setNotes(initialNotes);
-      setHasMoreMessages(initialHasMoreMessages);
-      setLoadingThread(false);
-      loadedThreadIdRef.current = activeId;
-      seededIdRef.current = null;
-      void createClient()
-        .from("conversations")
-        .update({ unread_count: 0 })
-        .eq("id", activeId);
-      setConversations((prev) =>
-        prev.map((c) => (c.id === activeId ? { ...c, unread_count: 0 } : c)),
-      );
+    // Deep-link /conversations/[id]: prefer SSR payload whenever the URL id changes.
+    // Avoids client-fetch skeletons (the main flicker when opening chats).
+    if (selectedId === activeId) {
+      if (appliedSelectedIdRef.current !== selectedId) {
+        setMessages(initialMessages);
+        setNotes(initialNotes);
+        setHasMoreMessages(initialHasMoreMessages);
+        setLoadingThread(false);
+        loadedThreadIdRef.current = activeId;
+        appliedSelectedIdRef.current = selectedId;
+        void createClient()
+          .from("conversations")
+          .update({ unread_count: 0 })
+          .eq("id", activeId);
+        setConversations((prev) =>
+          prev.map((c) => (c.id === activeId ? { ...c, unread_count: 0 } : c)),
+        );
+      }
       return;
     }
 
@@ -422,7 +423,7 @@ export function InboxView({
       cancelled = true;
     };
     // Intentionally only re-run when the active thread identity changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed arrays are applied once via seededIdRef
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- SSR arrays read once per selectedId change
   }, [activeId, selectedId]);
 
   useEffect(() => {
@@ -459,10 +460,9 @@ export function InboxView({
       setPickedId(id);
       return;
     }
+    // Keep the current thread painted until the next route SSR swaps in —
+    // clearing/skeleton here was the main “parpadeo” when opening a chat.
     setPickedId(id);
-    loadedThreadIdRef.current = null;
-    setLoadingThread(true);
-    setMessages([]);
     router.push(`/conversations/${id}`);
   }
 

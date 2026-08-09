@@ -23,13 +23,26 @@ export default function LoginPage() {
       email,
       password,
     });
-    setLoading(false);
     if (authError) {
+      setLoading(false);
       toast.error(authError.message);
       return;
     }
+
+    // Land on a deep-linked chat so SSR can paint the thread immediately
+    // (avoids /conversations → /conversations/[id] skeleton flicker).
+    const { data: firstChat } = await supabase
+      .from("conversations")
+      .select("id")
+      .order("last_message_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+
+    setLoading(false);
     toast.success("Bienvenido a Sofia Chat");
-    router.push("/conversations");
+    router.replace(
+      firstChat?.id ? `/conversations/${firstChat.id}` : "/conversations",
+    );
     router.refresh();
   }
 

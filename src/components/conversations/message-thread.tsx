@@ -70,11 +70,12 @@ export function MessageThread({
   const [recordSecs, setRecordSecs] = useState(0);
   const [preparingMic, setPreparingMic] = useState(false);
 
-  function scrollToBottom(behavior: ScrollBehavior = "auto") {
+  function scrollToBottom() {
     const el = parentRef.current;
     if (!el) return;
+    // Only scroll the thread scroller — scrollIntoView was jumping ancestors
+    // and making the chat look empty/flickery on first paint.
     el.scrollTop = el.scrollHeight;
-    bottomRef.current?.scrollIntoView({ block: "end", behavior });
   }
 
   useEffect(() => {
