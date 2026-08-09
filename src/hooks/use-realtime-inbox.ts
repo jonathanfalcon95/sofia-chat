@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { emitSofiaNotify } from "@/lib/sofia-notify";
 
@@ -36,6 +36,22 @@ export function useRealtimeInbox({
   onConversationChange: (patch: ConversationPatch) => void;
   onReloadConversations: () => void;
 }) {
+  const activeIdRef = useRef(activeConversationId);
+  const onMessageRef = useRef(onMessage);
+  const onConversationChangeRef = useRef(onConversationChange);
+  const onReloadRef = useRef(onReloadConversations);
+
+  useEffect(() => {
+    activeIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+    onConversationChangeRef.current = onConversationChange;
+    onReloadRef.current = onReloadConversations;
+  }, [onMessage, onConversationChange, onReloadConversations]);
+
+  // Stable list channel — does not recreate when switching threads
   useEffect(() => {
     const supabase = createClient();
     void supabase.auth.getSession().then(({ data }) => {
@@ -51,15 +67,15 @@ export function useRealtimeInbox({
         (payload) => {
           const row = (payload.new || payload.old) as ConversationPatch | null;
           if (!row?.id) {
-            onReloadConversations();
+            onReloadRef.current();
             return;
           }
           if (payload.eventType === "INSERT") {
-            onReloadConversations();
+            onReloadRef.current();
             return;
           }
           if (payload.eventType === "UPDATE" && payload.new) {
-            onConversationChange(payload.new as ConversationPatch);
+            onConversationChangeRef.current(payload.new as ConversationPatch);
           }
         },
       )
@@ -69,19 +85,16 @@ export function useRealtimeInbox({
         (payload) => {
           const msg = payload.new as MessageRow;
           if (!msg?.conversation_id) return;
-          if (msg.conversation_id === activeConversationId) {
-            onMessage(msg);
+          if (msg.conversation_id === activeIdRef.current) {
+            onMessageRef.current(msg);
           }
-          onConversationChange({
+          onConversationChangeRef.current({
             id: msg.conversation_id,
             last_message_at: msg.created_at,
             last_message_preview: msg.body,
             unread_count:
-              msg.conversation_id === activeConversationId
-                ? 0
-                : undefined,
+              msg.conversation_id === activeIdRef.current ? 0 : undefined,
           });
-          // Backup path for the notification bell (works even if bell channel lags)
           if (msg.direction === "inbound") {
             emitSofiaNotify({
               type: "message",
@@ -98,13 +111,9 @@ export function useRealtimeInbox({
     return () => {
       supabase.removeChannel(listChannel);
     };
-  }, [
-    activeConversationId,
-    onConversationChange,
-    onMessage,
-    onReloadConversations,
-  ]);
+  }, []);
 
+  // Thread channel only for the active conversation (status updates, etc.)
   useEffect(() => {
     if (!activeConversationId) return;
     const supabase = createClient();
@@ -120,7 +129,7 @@ export function useRealtimeInbox({
         },
         (payload) => {
           if (payload.eventType === "INSERT" && payload.new) {
-            onMessage(payload.new as MessageRow);
+            onMessageRef.current(payload.new as MessageRow);
           }
         },
       )
@@ -129,5 +138,5 @@ export function useRealtimeInbox({
     return () => {
       supabase.removeChannel(threadChannel);
     };
-  }, [activeConversationId, onMessage]);
+  }, [activeConversationId]);
 }

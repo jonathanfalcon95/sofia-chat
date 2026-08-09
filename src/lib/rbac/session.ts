@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import type { PermissionCode } from "@/lib/rbac/permissions";
 
@@ -31,7 +32,7 @@ export function sessionShowsAssignedCompanies(session: AppSession) {
   return !sessionIsCompanyAdmin(session);
 }
 
-export async function getAppSession(): Promise<AppSession | null> {
+export const getAppSession = cache(async (): Promise<AppSession | null> => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -101,7 +102,7 @@ export async function getAppSession(): Promise<AppSession | null> {
     isPlatformAdmin: profile.is_platform_admin,
     memberships: mapped,
   };
-}
+});
 
 export function sessionHasPermission(
   session: AppSession,

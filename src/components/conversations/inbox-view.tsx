@@ -1,18 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import { toast } from "sonner";
 import {
-  Check,
-  CheckCheck,
-  Clock,
+  ArrowLeft,
   Filter,
+  Info,
   Loader2,
   Search,
-  Send,
-  Ticket,
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -23,20 +29,13 @@ import {
   type TicketPriority,
 } from "@/lib/tickets";
 import { useRealtimeInbox } from "@/hooks/use-realtime-inbox";
-import {
-  addConversationNote,
-  assignConversation,
-  createTicket,
-  setConversationTag,
-} from "@/app/actions/conversations";
-import { setContactTags } from "@/app/actions/tags";
+import { createTicket } from "@/app/actions/conversations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -44,57 +43,32 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { EmojiPicker } from "@/components/conversations/emoji-picker";
-import { WhatsAppText } from "@/components/conversations/whatsapp-text";
+import { MessageThread } from "@/components/conversations/message-thread";
+import {
+  CONVERSATION_LIST_SELECT,
+  MESSAGE_PAGE_SIZE,
+  type AssigneeFilter,
+  type ConversationRow,
+  type MessageRow,
+  type NoteRow,
+} from "@/lib/conversations/types";
+import {
+  normalizeConversations,
+  normalizeNotes,
+} from "@/lib/conversations/normalize";
 
-type ContactTagRef = {
-  tag_id: string;
-  tags: { id: string; name: string; color: string } | null;
-};
-
-type ConversationRow = {
-  id: string;
-  company_id: string;
-  inbox_id: string;
-  contact_id?: string;
-  status: string;
-  last_message_at: string | null;
-  last_message_preview: string | null;
-  window_expires_at: string | null;
-  assignee_id: string | null;
-  unread_count: number;
-  contacts: {
-    id: string;
-    name: string | null;
-    phone_number: string;
-    contact_tags?: ContactTagRef[];
-  } | null;
-  inboxes: { name: string; phone_number: string } | null;
-  conversation_tags: Array<{
-    tag_id: string;
-    tags: { id: string; name: string; color: string } | null;
-  }>;
-};
-
-type MessageRow = {
-  id: string;
-  conversation_id?: string;
-  direction: string;
-  type: string;
-  body: string | null;
-  status: string;
-  created_at: string;
-  template_name: string | null;
-};
-
-type NoteRow = {
-  id: string;
-  body: string;
-  created_at: string;
-  profiles: { full_name: string | null; email: string } | null;
-};
-
-type AssigneeFilter = "all" | "mine" | "unassigned";
+const ConversationSidePanel = dynamic(
+  () =>
+    import("@/components/conversations/conversation-side-panel").then(
+      (m) => m.ConversationSidePanel,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <p className="text-sm text-[var(--muted)]">Cargando panel…</p>
+    ),
+  },
+);
 
 export function InboxView({
   initialConversations,
@@ -104,6 +78,9 @@ export function InboxView({
   inboxes: _inboxes,
   selectedId,
   currentUserId,
+  initialMessages = [],
+  initialNotes = [],
+  initialHasMoreMessages = false,
 }: {
   initialConversations: ConversationRow[];
   agents: Array<{
@@ -127,19 +104,51 @@ export function InboxView({
   }>;
   selectedId?: string;
   currentUserId?: string;
+  initialMessages?: MessageRow[];
+  initialNotes?: NoteRow[];
+  initialHasMoreMessages?: boolean;
 }) {
   void _inboxes;
+  const router = useRouter();
   const [conversations, setConversations] = useState(initialConversations);
-  const [activeId, setActiveId] = useState(
-    selectedId || initialConversations[0]?.id,
+  const [conversationsProp, setConversationsProp] = useState(
+    initialConversations,
   );
-  const [messages, setMessages] = useState<MessageRow[]>([]);
-  const [notes, setNotes] = useState<NoteRow[]>([]);
+  if (initialConversations !== conversationsProp) {
+    setConversationsProp(initialConversations);
+    setConversations(initialConversations);
+  }
+
+  const [isDesktop, setIsDesktop] = useState(true);
+  const [pickedId, setPickedId] = useState<string | null>(selectedId ?? null);
+  const [urlSelected, setUrlSelected] = useState(selectedId);
+  if (selectedId !== urlSelected) {
+    setUrlSelected(selectedId);
+    setPickedId(selectedId ?? null);
+  }
+
+  const activeId =
+    selectedId ??
+    (isDesktop
+      ? (pickedId ?? initialConversations[0]?.id ?? null)
+      : pickedId);
+
+  const [messages, setMessages] = useState<MessageRow[]>(
+    selectedId ? initialMessages : [],
+  );
+  const [notes, setNotes] = useState<NoteRow[]>(
+    selectedId ? initialNotes : [],
+  );
+  const [hasMoreMessages, setHasMoreMessages] = useState(
+    selectedId ? initialHasMoreMessages : false,
+  );
   const [loadingThread, setLoadingThread] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [text, setText] = useState("");
   const [pending, startTransition] = useTransition();
   const [note, setNote] = useState("");
   const [ticketOpen, setTicketOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [ticketTitle, setTicketTitle] = useState("");
   const [ticketDescription, setTicketDescription] = useState("");
   const [ticketPriority, setTicketPriority] =
@@ -150,19 +159,13 @@ export function InboxView({
     useState<AssigneeFilter>("all");
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesScrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const seededIdRef = useRef<string | null>(selectedId ?? null);
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
     [conversations, activeId],
   );
-
-  const companyAgents = useMemo(() => {
-    if (!active) return agents;
-    return agents.filter((a) => a.company_id === active.company_id);
-  }, [agents, active]);
 
   const filteredConversations = useMemo(() => {
     const query = phoneSearch.trim().toLowerCase();
@@ -228,68 +231,28 @@ export function InboxView({
   }
 
   useEffect(() => {
-    setConversations(initialConversations);
-  }, [initialConversations]);
+    const mq = window.matchMedia("(min-width: 901px)");
+    const sync = () => setIsDesktop(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
 
   const reloadConversations = useCallback(async () => {
     const supabase = createClient();
     const { data } = await supabase
       .from("conversations")
-      .select(
-        `
-        id, company_id, inbox_id, status, last_message_at, last_message_preview,
-        window_expires_at, assignee_id, unread_count, contact_id,
-        contacts (
-          id, name, phone_number,
-          contact_tags ( tag_id, tags ( id, name, color, is_kanban_column ) )
-        ),
-        inboxes ( name, phone_number ),
-        conversation_tags ( tag_id, tags ( id, name, color ) )
-      `,
-      )
+      .select(CONVERSATION_LIST_SELECT)
       .order("last_message_at", { ascending: false, nullsFirst: false })
       .limit(100);
-
-    const normalized =
-      data?.map((c) => {
-        const contact = Array.isArray(c.contacts) ? c.contacts[0] : c.contacts;
-        const ctags = (
-          (contact as { contact_tags?: Array<{ tag_id: string; tags: unknown }> } | null)
-            ?.contact_tags ?? []
-        )
-          .map((ct) => ({
-            tag_id: ct.tag_id,
-            tags: Array.isArray(ct.tags) ? ct.tags[0] : ct.tags,
-          }))
-          .filter(
-            (ct) =>
-              ct.tags &&
-              !(ct.tags as { is_kanban_column?: boolean }).is_kanban_column,
-          );
-        return {
-          ...c,
-          contacts: contact
-            ? {
-                id: (contact as { id: string }).id,
-                name: (contact as { name: string | null }).name,
-                phone_number: (contact as { phone_number: string }).phone_number,
-                contact_tags: ctags as ContactTagRef[],
-              }
-            : null,
-          inboxes: Array.isArray(c.inboxes) ? c.inboxes[0] : c.inboxes,
-          conversation_tags: (c.conversation_tags ?? []).map((ct) => ({
-            tag_id: ct.tag_id,
-            tags: Array.isArray(ct.tags) ? ct.tags[0] : ct.tags,
-          })),
-        };
-      }) ?? [];
-    setConversations(normalized as ConversationRow[]);
+    setConversations(
+      normalizeConversations(data as Array<Record<string, unknown>> | null),
+    );
   }, []);
 
   const onMessage = useCallback((msg: MessageRow) => {
     setMessages((prev) => {
       if (prev.some((m) => m.id === msg.id)) return prev;
-      // Replace optimistic pending bubble if realtime/API already delivered it
       const withoutDupPending = prev.filter(
         (m) =>
           !(
@@ -349,7 +312,7 @@ export function InboxView({
   );
 
   useRealtimeInbox({
-    activeConversationId: activeId,
+    activeConversationId: activeId ?? undefined,
     onMessage,
     onConversationChange,
     onReloadConversations: reloadConversations,
@@ -357,6 +320,23 @@ export function InboxView({
 
   useEffect(() => {
     if (!activeId) return;
+
+    if (seededIdRef.current === activeId && selectedId === activeId) {
+      setMessages(initialMessages);
+      setNotes(initialNotes);
+      setHasMoreMessages(initialHasMoreMessages);
+      setLoadingThread(false);
+      seededIdRef.current = null;
+      void createClient()
+        .from("conversations")
+        .update({ unread_count: 0 })
+        .eq("id", activeId);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === activeId ? { ...c, unread_count: 0 } : c)),
+      );
+      return;
+    }
+
     const supabase = createClient();
     let cancelled = false;
 
@@ -369,7 +349,8 @@ export function InboxView({
             "id, direction, type, body, status, created_at, template_name, conversation_id",
           )
           .eq("conversation_id", activeId)
-          .order("created_at", { ascending: true }),
+          .order("created_at", { ascending: false })
+          .limit(MESSAGE_PAGE_SIZE),
         supabase
           .from("conversation_notes")
           .select("id, body, created_at, profiles(full_name, email)")
@@ -377,12 +358,11 @@ export function InboxView({
           .order("created_at", { ascending: false }),
       ]);
       if (cancelled) return;
-      setMessages((msgs as MessageRow[]) ?? []);
+      const page = ((msgs as MessageRow[]) ?? []).slice().reverse();
+      setMessages(page);
+      setHasMoreMessages((msgs?.length ?? 0) >= MESSAGE_PAGE_SIZE);
       setNotes(
-        (noteRows as unknown as NoteRow[])?.map((n) => ({
-          ...n,
-          profiles: Array.isArray(n.profiles) ? n.profiles[0] : n.profiles,
-        })) ?? [],
+        normalizeNotes(noteRows as Array<Record<string, unknown>> | null),
       );
       await supabase
         .from("conversations")
@@ -398,19 +378,24 @@ export function InboxView({
     return () => {
       cancelled = true;
     };
-  }, [activeId]);
+  }, [
+    activeId,
+    initialHasMoreMessages,
+    initialMessages,
+    initialNotes,
+    selectedId,
+  ]);
 
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(id);
   }, []);
 
-  const canText = useMemo(
-    () => isWithinCustomerWindow(active?.window_expires_at),
-    [active?.window_expires_at, nowMs],
-  );
+  // nowMs refreshes window status every 30s
+  void nowMs;
+  const canText = isWithinCustomerWindow(active?.window_expires_at);
 
-  const windowHint = useMemo(() => {
+  const windowHint = (() => {
     if (!active?.window_expires_at) {
       return "Sin ventana activa: espera un mensaje del contacto";
     }
@@ -422,12 +407,59 @@ export function InboxView({
       addSuffix: true,
       locale: es,
     })}`;
-  }, [active?.window_expires_at, nowMs]);
+  })();
 
   function focusComposer() {
     requestAnimationFrame(() => {
       composerRef.current?.focus();
     });
+  }
+
+  function openConversation(id: string) {
+    setPickedId(id);
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      router.push(`/conversations/${id}`);
+    }
+  }
+
+  function backToList() {
+    setPickedId(null);
+    setMessages([]);
+    setNotes([]);
+    setHasMoreMessages(false);
+    setDetailOpen(false);
+    if (
+      selectedId ||
+      window.matchMedia("(max-width: 900px)").matches
+    ) {
+      router.push("/conversations");
+    }
+  }
+
+  async function loadOlderMessages() {
+    if (!activeId || loadingOlder || !hasMoreMessages || messages.length === 0) {
+      return;
+    }
+    const oldest = messages[0];
+    if (!oldest) return;
+    setLoadingOlder(true);
+    const supabase = createClient();
+    const { data } = await supabase
+      .from("messages")
+      .select(
+        "id, direction, type, body, status, created_at, template_name, conversation_id",
+      )
+      .eq("conversation_id", activeId)
+      .lt("created_at", oldest.created_at)
+      .order("created_at", { ascending: false })
+      .limit(MESSAGE_PAGE_SIZE);
+    const older = ((data as MessageRow[]) ?? []).slice().reverse();
+    setHasMoreMessages((data?.length ?? 0) >= MESSAGE_PAGE_SIZE);
+    setMessages((prev) => {
+      const ids = new Set(prev.map((m) => m.id));
+      return [...older.filter((m) => !ids.has(m.id)), ...prev];
+    });
+    setLoadingOlder(false);
   }
 
   function sendTextOptimistic() {
@@ -504,12 +536,6 @@ export function InboxView({
     })();
   }
 
-  useEffect(() => {
-    const node = messagesEndRef.current;
-    if (!node) return;
-    node.scrollIntoView({ behavior: loadingThread ? "auto" : "smooth" });
-  }, [messages, loadingThread, activeId]);
-
   function handleComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -519,27 +545,12 @@ export function InboxView({
     }
   }
 
-  function MessageStatusIcon({ status }: { status: string }) {
-    const s = status.toLowerCase();
-    if (s === "pending") {
-      return <Clock className="h-3 w-3 opacity-80" aria-label="Enviando" />;
-    }
-    if (s === "failed" || s === "error") {
-      return <X className="h-3 w-3 text-red-300" aria-label="Falló" />;
-    }
-    if (s === "read") {
-      return <CheckCheck className="h-3.5 w-3.5 text-sky-200" aria-label="Leído" />;
-    }
-    if (s === "delivered") {
-      return <CheckCheck className="h-3.5 w-3.5 opacity-80" aria-label="Entregado" />;
-    }
-    return <Check className="h-3 w-3 opacity-80" aria-label="Enviado" />;
-  }
+  const mobileView = activeId ? "thread" : "list";
 
   return (
-    <div className="-m-5">
-      <div className="chat-layout">
-        <section className="chat-pane">
+    <div>
+      <div className={`chat-layout chat-mobile-${mobileView}`}>
+        <section className="chat-pane chat-pane-list">
           <div className="space-y-2 border-b border-[var(--line)] p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -552,7 +563,7 @@ export function InboxView({
                   <select
                     value={filterContactTagId}
                     onChange={(e) => setFilterContactTagId(e.target.value)}
-                    className="h-7 min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-1 text-xs text-[var(--muted)] outline-none hover:border-[var(--line)] hover:bg-[var(--surface-2)] focus:border-[var(--line)] focus:bg-[var(--surface-2)]"
+                    className="h-11 min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-1 text-xs text-[var(--muted)] outline-none hover:border-[var(--line)] hover:bg-[var(--surface-2)] focus:border-[var(--line)] focus:bg-[var(--surface-2)]"
                     aria-label="Filtrar por tag"
                   >
                     <option value="">Tags</option>
@@ -577,7 +588,7 @@ export function InboxView({
                   key={opt.id}
                   type="button"
                   onClick={() => setAssigneeFilter(opt.id)}
-                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition ${
+                  className={`min-h-9 rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
                     assigneeFilter === opt.id
                       ? "bg-[var(--accent)] text-white"
                       : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--ink)]"
@@ -593,14 +604,14 @@ export function InboxView({
                 value={phoneSearch}
                 onChange={(e) => setPhoneSearch(e.target.value)}
                 placeholder="Buscar por teléfono o nombre..."
-                className="pl-8 pr-8"
+                className="min-h-11 pl-8 pr-8"
                 aria-label="Buscar conversaciones"
               />
               {phoneSearch ? (
                 <button
                   type="button"
                   onClick={() => setPhoneSearch("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted)] hover:text-[var(--ink)]"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-[var(--muted)] hover:text-[var(--ink)]"
                   aria-label="Limpiar búsqueda"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -616,7 +627,7 @@ export function InboxView({
                       key={t.id}
                       type="button"
                       onClick={() => setFilterContactTagId("")}
-                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                      className="inline-flex min-h-9 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
                       style={{
                         background: `${t.color}22`,
                         color: t.color,
@@ -631,7 +642,7 @@ export function InboxView({
             ) : null}
           </div>
 
-          <div className="flex-1 overflow-auto">
+          <div className="min-h-0 flex-1 overflow-auto">
             {filteredConversations.length === 0 ? (
               <div className="p-6 text-sm text-[var(--muted)]">
                 {phoneSearch.trim()
@@ -647,8 +658,8 @@ export function InboxView({
                   <button
                     key={c.id}
                     type="button"
-                    onClick={() => setActiveId(c.id)}
-                    className={`w-full border-b border-[var(--line)] px-4 py-3 text-left transition ${
+                    onClick={() => openConversation(c.id)}
+                    className={`chat-row w-full border-b border-[var(--line)] px-4 py-3 text-left transition ${
                       activeRow
                         ? "bg-[var(--accent-soft)]"
                         : "hover:bg-[var(--surface-2)]"
@@ -710,130 +721,69 @@ export function InboxView({
           </div>
         </section>
 
-        <section className="chat-pane">
+        <section className="chat-pane chat-pane-thread">
           {active ? (
             <>
-              <header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
-                <div>
-                  <h2 className="text-base font-bold">
-                    {active.contacts?.name || active.contacts?.phone_number}
-                  </h2>
-                  <p className="text-xs text-[var(--muted)]">
-                    {active.contacts?.phone_number} · {active.inboxes?.name}
-                  </p>
+              <header className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2.5 sm:px-4 sm:py-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={backToList}
+                    className="app-nav-toggle h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                    aria-label="Volver a conversaciones"
+                  >
+                    <ArrowLeft className="h-5 w-5" />
+                  </button>
+                  <div className="min-w-0">
+                    <h2 className="truncate text-base font-bold">
+                      {active.contacts?.name || active.contacts?.phone_number}
+                    </h2>
+                    <p className="truncate text-xs text-[var(--muted)]">
+                      {active.contacts?.phone_number} · {active.inboxes?.name}
+                    </p>
+                  </div>
                 </div>
-                <Badge
-                  className={
-                    canText
-                      ? "border-emerald-500/30 text-emerald-400"
-                      : "border-amber-500/30 text-amber-400"
-                  }
-                  title={windowHint}
-                >
-                  {canText ? "Ventana 24h abierta" : "Ventana 24h cerrada"}
-                </Badge>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Badge
+                    className={
+                      canText
+                        ? "hidden border-emerald-500/30 text-emerald-400 sm:inline-flex"
+                        : "hidden border-amber-500/30 text-amber-400 sm:inline-flex"
+                    }
+                    title={windowHint}
+                  >
+                    {canText ? "Ventana 24h abierta" : "Ventana 24h cerrada"}
+                  </Badge>
+                  <button
+                    type="button"
+                    onClick={() => setDetailOpen(true)}
+                    className="chat-detail-trigger h-11 w-11 items-center justify-center rounded-lg border border-[var(--line)] bg-[var(--surface-2)] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
+                    aria-label="Detalle de conversación"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                </div>
               </header>
 
-              <div
-                ref={messagesScrollRef}
-                className="chat-thread flex-1 space-y-2.5 overflow-auto p-4"
-              >
-                {loadingThread ? (
-                  <>
-                    <Skeleton className="h-14 w-2/3" />
-                    <Skeleton className="ml-auto h-14 w-1/2" />
-                    <Skeleton className="h-14 w-3/5" />
-                  </>
-                ) : (
-                  <>
-                    {messages.map((m) => (
-                      <div
-                        key={m.id}
-                        className={`msg-bubble max-w-[min(85%,36rem)] px-3 py-2 text-[14.5px] leading-[1.4] ${
-                          m.direction === "outbound"
-                            ? "msg-out ml-auto"
-                            : "msg-in"
-                        }`}
-                      >
-                        <div className="wa-text break-words whitespace-pre-wrap">
-                          <WhatsAppText text={m.body} />
-                        </div>
-                        <div
-                          className={`mt-1 flex items-center justify-end gap-1 text-[10px] leading-none ${
-                            m.direction === "outbound"
-                              ? "text-white/70"
-                              : "text-[var(--muted)]"
-                          }`}
-                        >
-                          <span>
-                            {new Date(m.created_at).toLocaleTimeString("es", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          {m.template_name ? (
-                            <span>· {m.template_name}</span>
-                          ) : null}
-                          {m.direction === "outbound" ? (
-                            <MessageStatusIcon status={m.status} />
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                    <div ref={messagesEndRef} />
-                  </>
-                )}
-              </div>
-
-              <footer className="border-t border-[var(--line)] bg-[var(--surface)] px-3 py-3 sm:px-4">
-                {!canText ? (
-                  <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-                    {windowHint}. WhatsApp solo permite mensajes libres dentro
-                    de las 24h desde el último mensaje entrante del contacto.
-                  </div>
-                ) : null}
-                <div
-                  className={`chat-composer ${!canText ? "opacity-60" : ""}`}
-                >
-                  <EmojiPicker disabled={!canText} onPick={insertEmoji} />
-                  <Textarea
-                    ref={composerRef}
-                    className="chat-composer-input"
-                    rows={1}
-                    placeholder={
-                      canText
-                        ? "Escribe un mensaje"
-                        : "Chat bloqueado hasta que el contacto escriba"
-                    }
-                    value={text}
-                    onChange={(e) => {
-                      setText(e.target.value);
-                      requestAnimationFrame(() => resizeComposer());
-                    }}
-                    onKeyDown={handleComposerKeyDown}
-                    disabled={!canText}
-                  />
-                  <Button
-                    type="button"
-                    size="icon"
-                    className="chat-composer-send"
-                    onClick={() => sendTextOptimistic()}
-                    disabled={!canText || !text.trim()}
-                    aria-label="Enviar mensaje"
-                    title="Enviar (Enter)"
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
-                </div>
-                {canText ? (
-                  <p className="mt-1.5 px-1 text-[10px] text-[var(--muted)]">
-                    Enter envía · Shift+Enter salto de línea
-                  </p>
-                ) : null}
-              </footer>
+              <MessageThread
+                messages={messages}
+                loadingThread={loadingThread}
+                loadingOlder={loadingOlder}
+                hasMore={hasMoreMessages}
+                onLoadOlder={() => void loadOlderMessages()}
+                canText={canText}
+                windowHint={windowHint}
+                text={text}
+                onTextChange={setText}
+                onSend={() => sendTextOptimistic()}
+                onComposerKeyDown={handleComposerKeyDown}
+                composerRef={composerRef}
+                onInsertEmoji={insertEmoji}
+                onResizeComposer={resizeComposer}
+              />
             </>
           ) : (
-            <div className="m-auto flex items-center gap-2 text-[var(--muted)]">
+            <div className="m-auto hidden items-center gap-2 p-6 text-[var(--muted)] sm:flex">
               <Loader2 className="h-4 w-4" /> Selecciona una conversación
             </div>
           )}
@@ -844,293 +794,20 @@ export function InboxView({
             Panel
           </h3>
           {active ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Asignar agente</Label>
-                <Select
-                  value={active.assignee_id ?? ""}
-                  onChange={(e) =>
-                    startTransition(async () => {
-                      try {
-                        await assignConversation(
-                          active.id,
-                          e.target.value || null,
-                        );
-                        setConversations((prev) =>
-                          prev.map((c) =>
-                            c.id === active.id
-                              ? { ...c, assignee_id: e.target.value || null }
-                              : c,
-                          ),
-                        );
-                        toast.success("Conversación asignada");
-                      } catch (err) {
-                        toast.error(
-                          err instanceof Error ? err.message : "Error",
-                        );
-                      }
-                    })
-                  }
-                >
-                  <option value="">Sin asignar</option>
-                  {companyAgents.map((a) => (
-                    <option key={`${a.company_id}-${a.id}`} value={a.id}>
-                      {a.full_name || a.email}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-[11px] text-[var(--muted)]">
-                  Solo usuarios con rol Agente de esta empresa
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Etiqueta / Kanban</Label>
-                <Select
-                  value={active.conversation_tags?.[0]?.tag_id ?? ""}
-                  onChange={(e) =>
-                    startTransition(async () => {
-                      try {
-                        await setConversationTag(active.id, e.target.value);
-                        const tag = tags.find((t) => t.id === e.target.value);
-                        setConversations((prev) =>
-                          prev.map((c) =>
-                            c.id === active.id
-                              ? {
-                                  ...c,
-                                  conversation_tags: tag
-                                    ? [
-                                        {
-                                          tag_id: tag.id,
-                                          tags: {
-                                            id: tag.id,
-                                            name: tag.name,
-                                            color: tag.color,
-                                          },
-                                        },
-                                      ]
-                                    : c.conversation_tags,
-                                }
-                              : c,
-                          ),
-                        );
-                        toast.success("Etiqueta actualizada");
-                      } catch (err) {
-                        toast.error(
-                          err instanceof Error ? err.message : "Error",
-                        );
-                      }
-                    })
-                  }
-                >
-                  <option value="" disabled>
-                    Seleccionar
-                  </option>
-                  {tags
-                    .filter((t) => t.company_id === active.company_id)
-                    .map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                </Select>
-              </div>
-
-              {active.contacts?.id ? (
-                <div className="space-y-2">
-                  <Label>Tags del contacto</Label>
-                  <div className="space-y-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] p-2">
-                    {contactTags
-                      .filter((t) => t.company_id === active.company_id)
-                      .map((t) => {
-                        const checked = Boolean(
-                          active.contacts?.contact_tags?.some(
-                            (ct) => ct.tag_id === t.id,
-                          ),
-                        );
-                        const busy = savingTagId === t.id;
-                        return (
-                          <label
-                            key={t.id}
-                            className={`flex items-center gap-2 text-sm ${
-                              busy
-                                ? "cursor-wait opacity-70"
-                                : "cursor-pointer"
-                            }`}
-                          >
-                            <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
-                              {busy ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--accent)]" />
-                              ) : (
-                                <input
-                                  type="checkbox"
-                                  className="h-3.5 w-3.5"
-                                  checked={checked}
-                                  disabled={Boolean(savingTagId)}
-                                  onChange={(e) => {
-                                    const contactId = active.contacts!.id;
-                                    const current =
-                                      active.contacts?.contact_tags?.map(
-                                        (ct) => ct.tag_id,
-                                      ) ?? [];
-                                    const next = e.target.checked
-                                      ? [...current, t.id]
-                                      : current.filter((id) => id !== t.id);
-                                    const previous =
-                                      active.contacts?.contact_tags ?? [];
-                                    const selected = contactTags
-                                      .filter((ct) => next.includes(ct.id))
-                                      .map((ct) => ({
-                                        tag_id: ct.id,
-                                        tags: {
-                                          id: ct.id,
-                                          name: ct.name,
-                                          color: ct.color,
-                                        },
-                                      }));
-                                    // Optimistic UI
-                                    setConversations((prev) =>
-                                      prev.map((c) =>
-                                        c.contacts?.id === contactId
-                                          ? {
-                                              ...c,
-                                              contacts: c.contacts
-                                                ? {
-                                                    ...c.contacts,
-                                                    contact_tags: selected,
-                                                  }
-                                                : c.contacts,
-                                            }
-                                          : c,
-                                      ),
-                                    );
-                                    setSavingTagId(t.id);
-                                    void (async () => {
-                                      try {
-                                        await setContactTags(contactId, next);
-                                        toast.success("Tags actualizados");
-                                      } catch (err) {
-                                        setConversations((prev) =>
-                                          prev.map((c) =>
-                                            c.contacts?.id === contactId
-                                              ? {
-                                                  ...c,
-                                                  contacts: c.contacts
-                                                    ? {
-                                                        ...c.contacts,
-                                                        contact_tags: previous,
-                                                      }
-                                                    : c.contacts,
-                                                }
-                                              : c,
-                                          ),
-                                        );
-                                        toast.error(
-                                          err instanceof Error
-                                            ? err.message
-                                            : "Error",
-                                        );
-                                      } finally {
-                                        setSavingTagId(null);
-                                      }
-                                    })();
-                                  }}
-                                />
-                              )}
-                            </span>
-                            <span
-                              className="inline-block h-2.5 w-2.5 rounded-full"
-                              style={{ background: t.color }}
-                            />
-                            {t.name}
-                          </label>
-                        );
-                      })}
-                    {contactTags.filter(
-                      (t) => t.company_id === active.company_id,
-                    ).length === 0 ? (
-                      <p className="text-xs text-[var(--muted)]">
-                        No hay tags. Créalos en Contactos.
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="space-y-2">
-                <Label>Nota interna</Label>
-                <Textarea
-                  rows={3}
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                />
-                <Button
-                  variant="secondary"
-                  className="w-full"
-                  disabled={!note || pending}
-                  onClick={() =>
-                    startTransition(async () => {
-                      try {
-                        await addConversationNote(
-                          active.id,
-                          active.company_id,
-                          note,
-                        );
-                        setNote("");
-                        toast.success("Nota guardada");
-                        const supabase = createClient();
-                        const { data: noteRows } = await supabase
-                          .from("conversation_notes")
-                          .select(
-                            "id, body, created_at, profiles(full_name, email)",
-                          )
-                          .eq("conversation_id", active.id)
-                          .order("created_at", { ascending: false });
-                        setNotes(
-                          (noteRows as unknown as NoteRow[])?.map((n) => ({
-                            ...n,
-                            profiles: Array.isArray(n.profiles)
-                              ? n.profiles[0]
-                              : n.profiles,
-                          })) ?? [],
-                        );
-                      } catch (err) {
-                        toast.error(
-                          err instanceof Error ? err.message : "Error",
-                        );
-                      }
-                    })
-                  }
-                >
-                  Guardar nota
-                </Button>
-              </div>
-
-              <div className="space-y-2">
-                {notes.map((n) => (
-                  <div
-                    key={n.id}
-                    className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs"
-                  >
-                    <strong>
-                      {n.profiles?.full_name || n.profiles?.email}
-                    </strong>
-                    <p className="mt-1">{n.body}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="border-t border-[var(--line)] pt-4">
-                <button
-                  type="button"
-                  onClick={() => setTicketOpen(true)}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--line)] px-3 py-2 text-xs text-[var(--muted)] transition hover:border-[var(--accent)]/40 hover:bg-[var(--accent-soft)]/40 hover:text-[var(--ink)]"
-                >
-                  <Ticket className="h-3.5 w-3.5" />
-                  Escalar a soporte
-                </button>
-              </div>
-            </div>
+            <ConversationSidePanel
+              active={active}
+              agents={agents}
+              tags={tags}
+              contactTags={contactTags}
+              notes={notes}
+              note={note}
+              onNoteChange={setNote}
+              onNotesChange={setNotes}
+              onConversationsChange={setConversations}
+              savingTagId={savingTagId}
+              onSavingTagIdChange={setSavingTagId}
+              onOpenTicket={() => setTicketOpen(true)}
+            />
           ) : (
             <p className="text-sm text-[var(--muted)]">
               Selecciona un chat para ver el panel
@@ -1138,6 +815,36 @@ export function InboxView({
           )}
         </section>
       </div>
+
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="max-h-[85dvh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Detalle</DialogTitle>
+            <DialogDescription>
+              Asignación, etiquetas y notas de la conversación
+            </DialogDescription>
+          </DialogHeader>
+          {active ? (
+            <ConversationSidePanel
+              active={active}
+              agents={agents}
+              tags={tags}
+              contactTags={contactTags}
+              notes={notes}
+              note={note}
+              onNoteChange={setNote}
+              onNotesChange={setNotes}
+              onConversationsChange={setConversations}
+              savingTagId={savingTagId}
+              onSavingTagIdChange={setSavingTagId}
+              onOpenTicket={() => {
+                setDetailOpen(false);
+                setTicketOpen(true);
+              }}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={ticketOpen}
@@ -1229,7 +936,7 @@ export function InboxView({
                         action: {
                           label: "Ver tickets",
                           onClick: () => {
-                            window.location.href = "/tickets";
+                            router.push("/tickets");
                           },
                         },
                       });

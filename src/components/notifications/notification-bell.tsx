@@ -6,7 +6,6 @@ import { Bell } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import type { InboxNotifyDetail } from "@/lib/sofia-notify";
 
 type NotificationItem = {
   id: string;
@@ -143,7 +142,7 @@ export function NotificationBell({ userId }: { userId: string }) {
       const { data: convs } = await supabase
         .from("conversations")
         .select("id, assignee_id")
-        .limit(300);
+        .limit(100);
       if (cancelled) return;
       for (const row of convs ?? []) {
         assigneeCache.current.set(
@@ -266,8 +265,9 @@ export function NotificationBell({ userId }: { userId: string }) {
     };
 
     const id = window.setInterval(() => {
+      if (document.hidden) return;
       void tick();
-    }, 8000);
+    }, 30_000);
     return () => window.clearInterval(id);
   }, [userId, push]);
 
@@ -302,7 +302,7 @@ export function NotificationBell({ userId }: { userId: string }) {
       </button>
 
       {open ? (
-        <div className="absolute right-0 z-40 mt-2 w-[320px] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-xl">
+        <div className="absolute right-0 z-40 mt-2 w-[min(320px,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-xl">
           <div className="flex items-center justify-between border-b border-[var(--line)] px-3 py-2">
             <span className="text-sm font-semibold">Notificaciones</span>
             <button

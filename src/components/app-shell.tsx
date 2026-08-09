@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
   Building2,
   Contact,
@@ -10,11 +11,13 @@ import {
   Kanban,
   LayoutDashboard,
   LogOut,
+  Menu,
   MessageSquare,
   Settings2,
   Ticket,
   UserCircle,
   Users,
+  X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -103,12 +106,26 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [navOpen, setNavOpen] = useState(false);
+
+  const isChatRoute = pathname.startsWith("/conversations");
+  const isChatThread =
+    isChatRoute && /^\/conversations\/[^/]+/.test(pathname);
 
   const visibleLinks = links.filter((link) => {
     if (!link.permission) return true;
     if (isPlatformAdmin) return true;
     return permissions.includes(link.permission);
   });
+
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
 
   async function logout() {
     const supabase = createClient();
@@ -118,21 +135,44 @@ export function AppShell({
   }
 
   return (
-    <div className="app-shell">
-      <aside className="flex flex-col gap-4 border-r border-[var(--line)] bg-[var(--sidebar)] px-3 py-4 text-[var(--sidebar-ink)]">
-        <div className="flex items-center gap-3 border-b border-[var(--line)] px-2 pb-4">
-          <Image
-            src="/sofia-logo.webp"
-            alt="sofIA"
-            width={42}
-            height={42}
-            className="h-10 w-10 object-contain"
-            priority
-          />
-          <div>
-            <div className="text-base font-bold tracking-tight">Sofia Chat</div>
-            <div className="text-xs text-[var(--muted)]">WhatsApp Inbox</div>
+    <div
+      className={cn(
+        "app-shell",
+        navOpen && "nav-open",
+        isChatThread && "chat-thread-open",
+      )}
+    >
+      <button
+        type="button"
+        className="app-nav-drawer-backdrop"
+        aria-label="Cerrar menú"
+        onClick={() => setNavOpen(false)}
+      />
+
+      <aside className="app-nav-aside flex flex-col gap-4 border-r border-[var(--line)] bg-[var(--sidebar)] px-3 py-4 text-[var(--sidebar-ink)]">
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-2 pb-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Image
+              src="/sofia-logo.webp"
+              alt="sofIA"
+              width={42}
+              height={42}
+              className="h-10 w-10 object-contain"
+              priority
+            />
+            <div className="min-w-0">
+              <div className="text-base font-bold tracking-tight">Sofia Chat</div>
+              <div className="text-xs text-[var(--muted)]">WhatsApp Inbox</div>
+            </div>
           </div>
+          <button
+            type="button"
+            className="app-nav-close h-11 w-11 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-2)]"
+            aria-label="Cerrar menú"
+            onClick={() => setNavOpen(false)}
+          >
+            <X size={20} />
+          </button>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1">
@@ -146,8 +186,9 @@ export function AppShell({
               <Link
                 key={link.href}
                 href={link.href}
+                onClick={() => setNavOpen(false)}
                 className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition",
+                  "flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition",
                   active
                     ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                     : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--sidebar-ink)]",
@@ -163,8 +204,9 @@ export function AppShell({
         <div className="space-y-3 border-t border-[var(--line)] pt-3">
           <Link
             href="/settings/profile"
+            onClick={() => setNavOpen(false)}
             className={cn(
-              "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition",
+              "flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition",
               pathname.startsWith("/settings/profile")
                 ? "bg-[var(--accent-soft)] text-[var(--accent)]"
                 : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--sidebar-ink)]",
@@ -177,23 +219,41 @@ export function AppShell({
             <div className="truncate text-xs text-[var(--muted)]">{userLabel}</div>
             <ThemeToggle />
           </div>
-          <Button variant="ghost" className="w-full" onClick={logout}>
+          <Button variant="ghost" className="w-full min-h-11" onClick={logout}>
             <LogOut size={16} /> Salir
           </Button>
         </div>
       </aside>
 
-      <div className="app-main">
-        <header className="flex h-[57px] items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-5">
-          <div className="text-sm font-semibold text-[var(--muted)]">
-            sofIA · Sofia Chat
+      <div className={cn("app-main", isChatRoute && "app-main--chat")}>
+        <header className="app-header flex items-center justify-between border-b border-[var(--line)] bg-[var(--surface)]">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              className="app-nav-toggle h-11 w-11 items-center justify-center rounded-lg border border-[var(--line)] bg-[var(--surface-2)] text-[var(--ink)] hover:bg-[var(--accent-soft)]"
+              aria-label="Abrir menú"
+              aria-expanded={navOpen}
+              onClick={() => setNavOpen(true)}
+            >
+              <Menu size={20} />
+            </button>
+            <div className="truncate text-sm font-semibold text-[var(--muted)]">
+              sofIA · Sofia Chat
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <NotificationBell userId={userId} />
             <ThemeToggle />
           </div>
         </header>
-        <main className="min-h-0 flex-1 p-5">{children}</main>
+        <main
+          className={cn(
+            "app-content min-h-0 flex-1",
+            isChatRoute ? "p-0" : "p-5",
+          )}
+        >
+          {children}
+        </main>
       </div>
     </div>
   );
