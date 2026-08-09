@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -123,7 +124,7 @@ export function InboxView({
     setConversations(initialConversations);
   }
 
-  const [isDesktop, setIsDesktop] = useState(true);
+  const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
   const [pickedId, setPickedId] = useState<string | null>(selectedId ?? null);
   const [urlSelected, setUrlSelected] = useState(selectedId);
   if (selectedId !== urlSelected) {
@@ -131,11 +132,9 @@ export function InboxView({
     setPickedId(selectedId ?? null);
   }
 
-  const activeId =
-    selectedId ??
-    (isDesktop
-      ? (pickedId ?? initialConversations[0]?.id ?? null)
-      : pickedId);
+  // Never auto-pick a chat before the user (or desktop redirect) chooses one.
+  // This avoids first-login skeleton flicker from client-fetching thread #1.
+  const activeId = selectedId ?? pickedId ?? null;
 
   const [messages, setMessages] = useState<MessageRow[]>(
     selectedId ? initialMessages : [],
@@ -166,6 +165,10 @@ export function InboxView({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const seededIdRef = useRef<string | null>(selectedId ?? null);
+  const loadedThreadIdRef = useRef<string | null>(
+    selectedId && initialMessages.length > 0 ? selectedId : null,
+  );
+  const desktopRedirectRef = useRef(false);
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
@@ -235,13 +238,23 @@ export function InboxView({
     });
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const mq = window.matchMedia("(min-width: 901px)");
     const sync = () => setIsDesktop(mq.matches);
     sync();
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
+
+  // Desktop first login: land on a deep-linked chat (SSR messages) instead of
+  // client-fetching the first thread (that caused skeleton flicker).
+  useEffect(() => {
+    if (selectedId || isDesktop !== true || desktopRedirectRef.current) return;
+    const firstId = initialConversations[0]?.id;
+    if (!firstId) return;
+    desktopRedirectRef.current = true;
+    router.replace(`/conversations/${firstId}`);
+  }, [selectedId, isDesktop, initialConversations, router]);
 
   const reloadConversations = useCallback(async () => {
     const supabase = createClient();
@@ -341,11 +354,13 @@ export function InboxView({
   useEffect(() => {
     if (!activeId) return;
 
+    // SSR-seeded thread for /conversations/[id]
     if (seededIdRef.current === activeId && selectedId === activeId) {
       setMessages(initialMessages);
       setNotes(initialNotes);
       setHasMoreMessages(initialHasMoreMessages);
       setLoadingThread(false);
+      loadedThreadIdRef.current = activeId;
       seededIdRef.current = null;
       void createClient()
         .from("conversations")
@@ -357,8 +372,12 @@ export function InboxView({
       return;
     }
 
+    // Already showing this thread — avoid skeleton reload loops.
+    if (loadedThreadIdRef.current === activeId) return;
+
     const supabase = createClient();
     let cancelled = false;
+    const requestId = activeId;
 
     async function load() {
       setLoadingThread(true);
@@ -368,13 +387,13 @@ export function InboxView({
           .select(
             "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename",
           )
-          .eq("conversation_id", activeId)
+          .eq("conversation_id", requestId)
           .order("created_at", { ascending: false })
           .limit(MESSAGE_PAGE_SIZE),
         supabase
           .from("conversation_notes")
           .select("id, body, created_at, profiles(full_name, email)")
-          .eq("conversation_id", activeId)
+          .eq("conversation_id", requestId)
           .order("created_at", { ascending: false }),
       ]);
       if (cancelled) return;
@@ -387,12 +406,13 @@ export function InboxView({
       setNotes(
         normalizeNotes(noteRows as Array<Record<string, unknown>> | null),
       );
+      loadedThreadIdRef.current = requestId;
       await supabase
         .from("conversations")
         .update({ unread_count: 0 })
-        .eq("id", activeId);
+        .eq("id", requestId);
       setConversations((prev) =>
-        prev.map((c) => (c.id === activeId ? { ...c, unread_count: 0 } : c)),
+        prev.map((c) => (c.id === requestId ? { ...c, unread_count: 0 } : c)),
       );
       setLoadingThread(false);
     }
@@ -401,13 +421,9 @@ export function InboxView({
     return () => {
       cancelled = true;
     };
-  }, [
-    activeId,
-    initialHasMoreMessages,
-    initialMessages,
-    initialNotes,
-    selectedId,
-  ]);
+    // Intentionally only re-run when the active thread identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed arrays are applied once via seededIdRef
+  }, [activeId, selectedId]);
 
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -439,8 +455,14 @@ export function InboxView({
   }
 
   function openConversation(id: string) {
+    if (id === selectedId || id === activeId) {
+      setPickedId(id);
+      return;
+    }
     setPickedId(id);
-    // Always sync URL so deep-link/refresh keep the same chat open.
+    loadedThreadIdRef.current = null;
+    setLoadingThread(true);
+    setMessages([]);
     router.push(`/conversations/${id}`);
   }
 
@@ -450,6 +472,7 @@ export function InboxView({
     setNotes([]);
     setHasMoreMessages(false);
     setDetailOpen(false);
+    loadedThreadIdRef.current = null;
     if (
       selectedId ||
       window.matchMedia("(max-width: 900px)").matches

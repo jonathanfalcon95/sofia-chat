@@ -79,10 +79,10 @@ export function MessageThread({
 
   useEffect(() => {
     if (loadingThread) return;
-    const el = parentRef.current;
-    if (!el) return;
+    if (messages.length === 0) return;
 
     const firstId = messages[0]?.id ?? null;
+    const lastId = messages[messages.length - 1]?.id ?? null;
     const grew = messages.length > prevCountRef.current;
     const prepended =
       grew &&
@@ -97,15 +97,10 @@ export function MessageThread({
     if (prepended) return;
     if (!stickToBottomRef.current && grew) return;
 
+    // Single rAF is enough; repeated timeouts caused visible flicker with media.
     const t0 = requestAnimationFrame(() => scrollToBottom());
-    const t1 = window.setTimeout(() => scrollToBottom(), 50);
-    const t2 = window.setTimeout(() => scrollToBottom(), 250);
-    return () => {
-      cancelAnimationFrame(t0);
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-    };
-  }, [messages, loadingThread]);
+    return () => cancelAnimationFrame(t0);
+  }, [loadingThread, messages.length, messages[messages.length - 1]?.id]);
 
   useEffect(() => {
     return () => {

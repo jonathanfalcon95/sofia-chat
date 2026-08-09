@@ -88,16 +88,22 @@ export function useRealtimeInbox({
         (payload) => {
           const msg = payload.new as MessageRow;
           if (!msg?.conversation_id) return;
+          // Active thread inserts are handled by the dedicated thread channel.
           if (msg.conversation_id === activeIdRef.current) {
-            onMessageRef.current(msg);
+            onConversationChangeRef.current({
+              id: msg.conversation_id,
+              last_message_at: msg.created_at,
+              last_message_preview: msg.body,
+              unread_count: 0,
+            });
+          } else {
+            onConversationChangeRef.current({
+              id: msg.conversation_id,
+              last_message_at: msg.created_at,
+              last_message_preview: msg.body,
+              unread_count: undefined,
+            });
           }
-          onConversationChangeRef.current({
-            id: msg.conversation_id,
-            last_message_at: msg.created_at,
-            last_message_preview: msg.body,
-            unread_count:
-              msg.conversation_id === activeIdRef.current ? 0 : undefined,
-          });
           if (msg.direction === "inbound") {
             emitSofiaNotify({
               type: "message",
