@@ -158,6 +158,7 @@ export function InboxView({
   const [assigneeFilter, setAssigneeFilter] =
     useState<AssigneeFilter>("all");
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
+  const [mediaSending, setMediaSending] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const seededIdRef = useRef<string | null>(selectedId ?? null);
@@ -346,7 +347,7 @@ export function InboxView({
         supabase
           .from("messages")
           .select(
-            "id, direction, type, body, status, created_at, template_name, conversation_id",
+            "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename",
           )
           .eq("conversation_id", activeId)
           .order("created_at", { ascending: false })
@@ -447,7 +448,7 @@ export function InboxView({
     const { data } = await supabase
       .from("messages")
       .select(
-        "id, direction, type, body, status, created_at, template_name, conversation_id",
+        "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename",
       )
       .eq("conversation_id", activeId)
       .lt("created_at", oldest.created_at)
@@ -534,6 +535,89 @@ export function InboxView({
         toast.error(e instanceof Error ? e.message : "No se pudo enviar");
       }
     })();
+  }
+
+  async function sendMediaFile(file: File, caption?: string) {
+    if (!active || !isWithinCustomerWindow(active.window_expires_at)) {
+      throw new Error("Fuera de la ventana de 24h");
+    }
+    const conversationId = active.id;
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    const localPreviewUrl = URL.createObjectURL(file);
+    const mime = file.type.split(";")[0] || "application/octet-stream";
+    const type = mime.startsWith("image/")
+      ? "image"
+      : mime.startsWith("audio/")
+        ? "audio"
+        : "document";
+    const body =
+      caption ||
+      (type === "audio" ? "Nota de voz" : type === "image" ? "Imagen" : file.name);
+
+    const optimistic: MessageRow = {
+      id: tempId,
+      conversation_id: conversationId,
+      direction: "outbound",
+      type,
+      body,
+      status: "pending",
+      created_at: createdAt,
+      template_name: null,
+      media_mime: mime,
+      media_filename: file.name,
+      localPreviewUrl,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    setMediaSending(true);
+
+    try {
+      const form = new FormData();
+      form.set("conversationId", conversationId);
+      form.set("file", file);
+      if (caption) form.set("caption", caption);
+
+      const res = await fetch("/api/messages/send-media", {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al enviar media");
+
+      setMessages((prev) => {
+        const withoutTemp = prev.filter((m) => m.id !== tempId);
+        if (data.message) {
+          const msg = {
+            ...(data.message as MessageRow),
+            localPreviewUrl,
+          };
+          if (withoutTemp.some((m) => m.id === msg.id)) return withoutTemp;
+          return [...withoutTemp, msg];
+        }
+        return withoutTemp.map((m) =>
+          m.id === tempId ? { ...m, status: "accepted" } : m,
+        );
+      });
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === conversationId
+            ? {
+                ...c,
+                last_message_at: createdAt,
+                last_message_preview: body.slice(0, 200),
+              }
+            : c,
+        ),
+      );
+    } catch (e) {
+      URL.revokeObjectURL(localPreviewUrl);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempId ? { ...m, status: "failed" } : m)),
+      );
+      throw e;
+    } finally {
+      setMediaSending(false);
+    }
   }
 
   function handleComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -776,6 +860,8 @@ export function InboxView({
                 text={text}
                 onTextChange={setText}
                 onSend={() => sendTextOptimistic()}
+                onSendMedia={sendMediaFile}
+                mediaSending={mediaSending}
                 onComposerKeyDown={handleComposerKeyDown}
                 composerRef={composerRef}
                 onInsertEmoji={insertEmoji}

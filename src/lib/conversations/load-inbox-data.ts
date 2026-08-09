@@ -17,7 +17,7 @@ export async function loadInboxBootstrap(conversationId?: string) {
     ? supabase
         .from("messages")
         .select(
-          "id, direction, type, body, status, created_at, template_name, conversation_id",
+          "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename",
         )
         .eq("conversation_id", conversationId)
         .order("created_at", { ascending: false })

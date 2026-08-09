@@ -13,6 +13,9 @@ type MessageRow = {
   status: string;
   created_at: string;
   template_name: string | null;
+  media_url?: string | null;
+  media_mime?: string | null;
+  media_filename?: string | null;
 };
 
 type ConversationPatch = {

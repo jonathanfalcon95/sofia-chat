@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyYCloudSignature } from "@/lib/ycloud/signature";
+import { extractInboundMedia } from "@/lib/media";
 
 export const runtime = "nodejs";
 
@@ -50,6 +51,32 @@ export async function POST(request: Request) {
   if (error) {
     console.error("webhook rpc error", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Enrich inbound media fields (link/mime/filename) that the RPC may omit.
+  if (
+    eventType === "whatsapp.inbound_message.received" ||
+    eventType === "whatsapp.inbound.message"
+  ) {
+    const msg = (payload.whatsappInboundMessage ||
+      payload.whatsappMessage) as Record<string, unknown> | undefined;
+    if (msg) {
+      const media = extractInboundMedia(msg);
+      const ycloudId = String(msg.id ?? msg.wamid ?? "");
+      if (media && ycloudId) {
+        await supabase
+          .from("messages")
+          .update({
+            type: media.type,
+            body: media.body,
+            media_url: media.mediaUrl,
+            media_mime: media.mediaMime,
+            media_filename: media.mediaFilename,
+            media_sha256: media.mediaSha256,
+          })
+          .eq("ycloud_message_id", ycloudId);
+      }
+    }
   }
 
   return NextResponse.json({ received: true, result: data });

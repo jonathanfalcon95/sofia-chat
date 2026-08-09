@@ -36,6 +36,11 @@ export type MessageRow = {
   status: string;
   created_at: string;
   template_name: string | null;
+  media_url?: string | null;
+  media_mime?: string | null;
+  media_filename?: string | null;
+  /** Client-only blob URL for optimistic outbound media. */
+  localPreviewUrl?: string | null;
 };
 
 export type NoteRow = {

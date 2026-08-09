@@ -1,14 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Mic, Paperclip, Send, Square } from "lucide-react";
+import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { WhatsAppText } from "@/components/conversations/whatsapp-text";
 import { MessageStatusIcon } from "@/components/conversations/message-status-icon";
+import { MessageMedia } from "@/components/conversations/message-media";
+import { validateOutboundFile } from "@/lib/media";
 import type { MessageRow } from "@/lib/conversations/types";
 
 const EmojiPicker = dynamic(
@@ -28,6 +31,8 @@ export function MessageThread({
   text,
   onTextChange,
   onSend,
+  onSendMedia,
+  mediaSending,
   onComposerKeyDown,
   composerRef,
   onInsertEmoji,
@@ -43,19 +48,25 @@ export function MessageThread({
   text: string;
   onTextChange: (value: string) => void;
   onSend: () => void;
+  onSendMedia: (file: File, caption?: string) => Promise<void>;
+  mediaSending: boolean;
   onComposerKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   onInsertEmoji: (emoji: string) => void;
   onResizeComposer: () => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const stickToBottomRef = useRef(true);
   const prevCountRef = useRef(0);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const [recording, setRecording] = useState(false);
 
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 72,
+    estimateSize: () => 88,
     overscan: 12,
     getItemKey: (index) => messages[index]?.id ?? index,
   });
@@ -83,6 +94,12 @@ export function MessageThread({
     });
   }, [messages, loadingThread, virtualizer]);
 
+  useEffect(() => {
+    return () => {
+      recorderRef.current?.stop();
+    };
+  }, []);
+
   function handleScroll() {
     const el = parentRef.current;
     if (!el) return;
@@ -92,6 +109,60 @@ export function MessageThread({
       onLoadOlder();
     }
   }
+
+  async function onPickFile(file: File | null) {
+    if (!file) return;
+    const check = validateOutboundFile(file);
+    if (!check.ok) {
+      toast.error(check.error);
+      return;
+    }
+    try {
+      await onSendMedia(file, text.trim() || undefined);
+      onTextChange("");
+      requestAnimationFrame(() => onResizeComposer());
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo enviar");
+    }
+  }
+
+  async function toggleRecording() {
+    if (recording) {
+      recorderRef.current?.stop();
+      setRecording(false);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+        ? "audio/ogg;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: mime });
+        const ext = mime.includes("ogg") ? "ogg" : "webm";
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, {
+          type: mime.split(";")[0],
+        });
+        void onPickFile(file);
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      toast.error("No se pudo acceder al micrófono");
+    }
+  }
+
+  const isMedia = (t: string) =>
+    ["image", "audio", "video", "document", "sticker"].includes(t);
 
   return (
     <>
@@ -158,9 +229,13 @@ export function MessageThread({
                           : "msg-in"
                       }`}
                     >
-                      <div className="wa-text break-words whitespace-pre-wrap">
-                        <WhatsAppText text={m.body} />
-                      </div>
+                      {isMedia(m.type) ? (
+                        <MessageMedia message={m} />
+                      ) : (
+                        <div className="wa-text break-words whitespace-pre-wrap">
+                          <WhatsAppText text={m.body} />
+                        </div>
+                      )}
                       <div
                         className={`mt-1 flex items-center justify-end gap-1 text-[10px] leading-none ${
                           m.direction === "outbound"
@@ -198,15 +273,60 @@ export function MessageThread({
           </div>
         ) : null}
         <div className={`chat-composer ${!canText ? "opacity-60" : ""}`}>
-          <EmojiPicker disabled={!canText} onPick={onInsertEmoji} />
+          <EmojiPicker disabled={!canText || mediaSending} onPick={onInsertEmoji} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              e.target.value = "";
+              void onPickFile(f);
+            }}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={!canText || mediaSending}
+            className="h-9 w-9 shrink-0 rounded-full border-0 text-[var(--muted)]"
+            aria-label="Adjuntar archivo"
+            title="Imagen o PDF"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={!canText || mediaSending}
+            className={`h-9 w-9 shrink-0 rounded-full border-0 ${
+              recording
+                ? "bg-red-500/15 text-red-500"
+                : "text-[var(--muted)]"
+            }`}
+            aria-label={recording ? "Detener grabación" : "Nota de voz"}
+            title={recording ? "Detener" : "Nota de voz"}
+            onClick={() => void toggleRecording()}
+          >
+            {recording ? (
+              <Square className="h-4 w-4" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
+          </Button>
           <Textarea
             ref={composerRef}
             className="chat-composer-input"
             rows={1}
             placeholder={
-              canText
-                ? "Escribe un mensaje"
-                : "Chat bloqueado hasta que el contacto escriba"
+              recording
+                ? "Grabando nota de voz…"
+                : canText
+                  ? "Escribe un mensaje"
+                  : "Chat bloqueado hasta que el contacto escriba"
             }
             value={text}
             onChange={(e) => {
@@ -214,23 +334,28 @@ export function MessageThread({
               requestAnimationFrame(() => onResizeComposer());
             }}
             onKeyDown={onComposerKeyDown}
-            disabled={!canText}
+            disabled={!canText || mediaSending || recording}
           />
           <Button
             type="button"
             size="icon"
             className="chat-composer-send"
             onClick={onSend}
-            disabled={!canText || !text.trim()}
+            disabled={!canText || !text.trim() || mediaSending || recording}
             aria-label="Enviar mensaje"
             title="Enviar (Enter)"
           >
-            <Send className="h-4 w-4" />
+            {mediaSending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
           </Button>
         </div>
         {canText ? (
           <p className="mt-1.5 px-1 text-[10px] text-[var(--muted)]">
-            Enter envía · Shift+Enter salto de línea
+            Enter envía · Shift+Enter salto · micrófono nota de voz · clip
+            imagen/PDF
           </p>
         ) : null}
       </footer>
