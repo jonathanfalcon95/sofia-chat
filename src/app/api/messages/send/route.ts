@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { sendWhatsAppText, sendWhatsAppTemplate } from "@/lib/ycloud/client";
 import { isWithinCustomerWindow } from "@/lib/utils";
+import {
+  getAppSession,
+  sessionHasPermission,
+} from "@/lib/rbac/session";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const session = await getAppSession();
+  if (!session) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -32,6 +35,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
   }
 
+  if (
+    !sessionHasPermission(
+      session,
+      conversation.company_id as string,
+      "conversations.reply",
+    )
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          "No tienes permiso para responder en esta conversación (conversations.reply).",
+      },
+      { status: 403 },
+    );
+  }
+
   const inbox = Array.isArray(conversation.inboxes)
     ? conversation.inboxes[0]
     : conversation.inboxes;
@@ -42,6 +61,10 @@ export async function POST(request: Request) {
   if (!inbox?.phone_number || !contact?.phone_number) {
     return NextResponse.json({ error: "missing_phones" }, { status: 400 });
   }
+
+  // Persist with service role after authz checks so a successful YCloud send
+  // cannot be orphaned by messages INSERT RLS.
+  const admin = createAdminClient();
 
   try {
     if (mode === "text") {
@@ -71,7 +94,7 @@ export async function POST(request: Request) {
         (ycloudRes.messageId as string | undefined) ||
         null;
 
-      const { data: message, error: msgError } = await supabase
+      const { data: message, error: msgError } = await admin
         .from("messages")
         .insert({
           conversation_id: conversationId,
@@ -81,7 +104,7 @@ export async function POST(request: Request) {
           body: text,
           ycloud_message_id: ycloudId,
           status: "accepted",
-          sent_by: user.id,
+          sent_by: session.userId,
           raw_payload: ycloudRes,
         })
         .select("*")
@@ -91,7 +114,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: msgError.message }, { status: 500 });
       }
 
-      await supabase
+      await admin
         .from("conversations")
         .update({
           last_message_at: new Date().toISOString(),
@@ -100,6 +123,16 @@ export async function POST(request: Request) {
         .eq("id", conversationId);
 
       return NextResponse.json({ message, ycloud: ycloudRes });
+    }
+
+    if (!sessionHasPermission(session, conversation.company_id as string, "templates.send")) {
+      return NextResponse.json(
+        {
+          error:
+            "No tienes permiso para enviar plantillas (templates.send).",
+        },
+        { status: 403 },
+      );
     }
 
     const templateName = String(body.templateName ?? "").trim();
@@ -123,7 +156,7 @@ export async function POST(request: Request) {
       (ycloudRes.messageId as string | undefined) ||
       null;
 
-    const { data: message, error: msgError } = await supabase
+    const { data: message, error: msgError } = await admin
       .from("messages")
       .insert({
         conversation_id: conversationId,
@@ -136,7 +169,7 @@ export async function POST(request: Request) {
         template_components: body.components ?? [],
         ycloud_message_id: ycloudId,
         status: "accepted",
-        sent_by: user.id,
+        sent_by: session.userId,
         raw_payload: ycloudRes,
       })
       .select("*")
@@ -146,7 +179,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
-    await supabase
+    await admin
       .from("conversations")
       .update({
         last_message_at: new Date().toISOString(),
