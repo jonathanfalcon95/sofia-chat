@@ -9,7 +9,6 @@ function mediaSrc(m: MessageRow) {
   if (m.localPreviewUrl) return m.localPreviewUrl;
   const cached = takeMediaPreview(m.id);
   if (cached) return cached;
-  // YCloud download link or storage:chat-media/... (served by proxy).
   if (m.media_url) return `/api/media/${m.id}`;
   return null;
 }
@@ -22,12 +21,16 @@ function MediaFallback({
   outbound?: boolean;
 }) {
   return (
-    <div
-      className={`text-sm opacity-90 ${outbound ? "text-white/90" : ""}`}
-    >
+    <div className={`px-2 py-1 text-sm opacity-90 ${outbound ? "text-white/90" : ""}`}>
       {label}
     </div>
   );
+}
+
+function isPlainMediaLabel(body: string | null | undefined, type: string) {
+  if (!body) return true;
+  const labels = ["Imagen", "Nota de voz", "Video", "Sticker", "Documento", `[${type}]`];
+  return labels.includes(body);
 }
 
 export function MessageMedia({
@@ -56,17 +59,13 @@ export function MessageMedia({
       <>
         <button
           type="button"
-          className="block max-w-full overflow-hidden rounded-lg"
+          className="msg-media-frame"
           onClick={() => setLightbox(true)}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={src}
             alt={m.body || "Imagen"}
-            className={`max-h-64 max-w-full object-contain ${
-              type === "sticker" ? "max-h-32" : ""
-            }`}
-            style={{ maxHeight: type === "sticker" ? 128 : 256 }}
             loading="lazy"
             decoding="async"
             onLoad={() => onContentReady?.()}
@@ -76,8 +75,8 @@ export function MessageMedia({
             }}
           />
         </button>
-        {m.body && type === "image" && m.body !== "Imagen" && m.body !== "[image]" ? (
-          <div className="mt-1.5 text-sm">{m.body}</div>
+        {type === "image" && !isPlainMediaLabel(m.body, type) ? (
+          <div className="mt-1.5 px-1.5 text-sm leading-snug">{m.body}</div>
         ) : null}
         {lightbox ? (
           <div
@@ -110,18 +109,18 @@ export function MessageMedia({
   if (type === "audio") {
     if (!src || failed) {
       return (
-        <div className="flex items-center gap-2 text-sm">
-          <Mic className="h-4 w-4" />
+        <div className="flex items-center gap-2 px-1 text-sm">
+          <Mic className="h-4 w-4 shrink-0" />
           {m.body || "Nota de voz"}
         </div>
       );
     }
     return (
-      <div className="min-w-[200px]">
+      <div className="w-full min-w-0">
         <audio
           controls
           preload="metadata"
-          className="w-full max-w-[260px]"
+          className="block h-10 w-full"
           src={src}
           onLoadedMetadata={() => onContentReady?.()}
           onError={() => {
@@ -129,7 +128,7 @@ export function MessageMedia({
             onContentReady?.();
           }}
         />
-        {m.body && m.body !== "Nota de voz" ? (
+        {!isPlainMediaLabel(m.body, type) ? (
           <div className="mt-1 text-xs opacity-80">{m.body}</div>
         ) : null}
       </div>
@@ -141,18 +140,18 @@ export function MessageMedia({
       return <MediaFallback label={m.body || "Video"} outbound={outbound} />;
     }
     return (
-      <video
-        controls
-        preload="metadata"
-        className="max-h-64 max-w-full rounded-lg"
-        onLoadedMetadata={() => onContentReady?.()}
-        onError={() => {
-          setFailed(true);
-          onContentReady?.();
-        }}
-      >
-        <source src={src} type={m.media_mime || undefined} />
-      </video>
+      <div className="msg-media-frame">
+        <video
+          controls
+          preload="metadata"
+          src={src}
+          onLoadedMetadata={() => onContentReady?.()}
+          onError={() => {
+            setFailed(true);
+            onContentReady?.();
+          }}
+        />
+      </div>
     );
   }
 
@@ -163,17 +162,15 @@ export function MessageMedia({
         href={href}
         target="_blank"
         rel="noreferrer"
-        className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
-          outbound
-            ? "border-white/30 text-white"
-            : "border-[var(--line)]"
+        className={`inline-flex max-w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${
+          outbound ? "border-white/30 text-white" : "border-[var(--line)]"
         } ${href ? "hover:underline" : "pointer-events-none opacity-70"}`}
         onClick={(e) => {
           if (!href) e.preventDefault();
         }}
       >
         <FileText className="h-4 w-4 shrink-0" />
-        <span className="truncate">
+        <span className="min-w-0 truncate">
           {m.media_filename || m.body || "Documento"}
         </span>
       </a>

@@ -171,14 +171,63 @@ button {
 }
 
 .msg-bubble {
+  width: fit-content;
+  max-width: min(85%, 28rem);
   border-radius: 12px;
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+}
+
+.msg-bubble-media {
+  max-width: min(82%, 17.5rem);
+  padding: 0.25rem;
+}
+
+.msg-bubble-media.msg-bubble-audio {
+  min-width: min(82%, 15.5rem);
+  max-width: min(85%, 18rem);
+  padding: 0.5rem 0.65rem 0.35rem;
+}
+
+.msg-bubble-media.msg-bubble-doc {
+  max-width: min(85%, 20rem);
+  padding: 0.45rem 0.55rem 0.35rem;
+}
+
+.msg-bubble-media .msg-media-frame {
+  display: block;
+  overflow: hidden;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.msg-bubble-media .msg-media-frame img,
+.msg-bubble-media .msg-media-frame video {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 16rem;
+  object-fit: contain;
+}
+
+.msg-bubble-media.msg-bubble-sticker {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  max-width: 8.5rem;
+}
+
+.msg-bubble-media.msg-bubble-sticker .msg-media-frame img {
+  max-height: 7.5rem;
 }
 
 .msg-out {
   background: var(--bubble-out);
   color: white;
   border-top-right-radius: 4px;
+  margin-left: auto;
+  align-self: flex-end;
 }
 
 .msg-in {
@@ -186,6 +235,7 @@ button {
   color: var(--ink);
   border: 1px solid var(--line);
   border-top-left-radius: 4px;
+  align-self: flex-start;
 }
 
 .chat-pane-thread {

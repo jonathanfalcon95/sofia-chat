@@ -254,49 +254,64 @@ export function MessageThread({
               </div>
             ) : null}
             <div className="flex flex-col gap-2.5">
-              {messages.map((m) => (
-                <div
-                  key={m.id}
-                  className={`msg-bubble max-w-[min(85%,36rem)] px-3 py-2 text-[14.5px] leading-[1.4] ${
-                    m.direction === "outbound"
-                      ? "msg-out ml-auto"
-                      : "msg-in"
-                  }`}
-                >
-                  {isMedia(m.type) ? (
-                    <MessageMedia
-                      message={m}
-                      onContentReady={() => {
-                        if (stickToBottomRef.current) {
-                          requestAnimationFrame(() => scrollToBottom());
-                        }
-                      }}
-                    />
-                  ) : (
-                    <div className="wa-text break-words whitespace-pre-wrap">
-                      <WhatsAppText text={m.body} />
-                    </div>
-                  )}
+              {messages.map((m) => {
+                const media = isMedia(m.type);
+                return (
                   <div
-                    className={`mt-1 flex items-center justify-end gap-1 text-[10px] leading-none ${
-                      m.direction === "outbound"
-                        ? "text-white/70"
-                        : "text-[var(--muted)]"
+                    key={m.id}
+                    className={`msg-bubble text-[14.5px] leading-[1.4] ${
+                      media
+                        ? `msg-bubble-media ${
+                            m.type === "audio"
+                              ? "msg-bubble-audio"
+                              : m.type === "document"
+                                ? "msg-bubble-doc"
+                                : m.type === "sticker"
+                                  ? "msg-bubble-sticker"
+                                  : ""
+                          }`
+                        : "px-3 py-2"
+                    } ${
+                      m.direction === "outbound" ? "msg-out" : "msg-in"
                     }`}
                   >
-                    <span>
-                      {new Date(m.created_at).toLocaleTimeString("es", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                    {m.template_name ? <span>· {m.template_name}</span> : null}
-                    {m.direction === "outbound" ? (
-                      <MessageStatusIcon status={m.status} />
-                    ) : null}
+                    {media ? (
+                      <MessageMedia
+                        message={m}
+                        onContentReady={() => {
+                          if (stickToBottomRef.current) {
+                            requestAnimationFrame(() => scrollToBottom());
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="wa-text break-words whitespace-pre-wrap">
+                        <WhatsAppText text={m.body} />
+                      </div>
+                    )}
+                    <div
+                      className={`mt-1 flex items-center justify-end gap-1 px-1 text-[10px] leading-none ${
+                        m.direction === "outbound"
+                          ? "text-white/70"
+                          : "text-[var(--muted)]"
+                      } ${m.type === "sticker" ? "px-0 text-[var(--muted)]" : ""}`}
+                    >
+                      <span>
+                        {new Date(m.created_at).toLocaleTimeString("es", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                      {m.template_name ? (
+                        <span>· {m.template_name}</span>
+                      ) : null}
+                      {m.direction === "outbound" ? (
+                        <MessageStatusIcon status={m.status} />
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               <div ref={bottomRef} aria-hidden className="h-px w-full" />
             </div>
           </>
