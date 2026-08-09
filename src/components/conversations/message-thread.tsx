@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { Loader2, Mic, Paperclip, Send, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -56,44 +55,51 @@ export function MessageThread({
   onResizeComposer: () => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const stickToBottomRef = useRef(true);
   const prevCountRef = useRef(0);
+  const prevFirstIdRef = useRef<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const measuredMediaRef = useRef(new Set<string>());
   const [recording, setRecording] = useState(false);
 
-  const virtualizer = useVirtualizer({
-    count: messages.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 88,
-    overscan: 12,
-    getItemKey: (index) => messages[index]?.id ?? index,
-  });
+  function scrollToBottom(behavior: ScrollBehavior = "auto") {
+    const el = parentRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    bottomRef.current?.scrollIntoView({ block: "end", behavior });
+  }
 
   useEffect(() => {
+    if (loadingThread) return;
     const el = parentRef.current;
-    if (!el || loadingThread) return;
+    if (!el) return;
 
+    const firstId = messages[0]?.id ?? null;
     const grew = messages.length > prevCountRef.current;
     const prepended =
       grew &&
       prevCountRef.current > 0 &&
-      messages[0]?.id !== undefined &&
-      !stickToBottomRef.current;
+      firstId != null &&
+      prevFirstIdRef.current != null &&
+      firstId !== prevFirstIdRef.current;
 
     prevCountRef.current = messages.length;
+    prevFirstIdRef.current = firstId;
 
     if (prepended) return;
     if (!stickToBottomRef.current && grew) return;
 
-    requestAnimationFrame(() => {
-      if (messages.length === 0) return;
-      virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
-      el.scrollTop = el.scrollHeight;
-    });
-  }, [messages, loadingThread, virtualizer]);
+    const t0 = requestAnimationFrame(() => scrollToBottom());
+    const t1 = window.setTimeout(() => scrollToBottom(), 50);
+    const t2 = window.setTimeout(() => scrollToBottom(), 250);
+    return () => {
+      cancelAnimationFrame(t0);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [messages, loadingThread]);
 
   useEffect(() => {
     return () => {
@@ -200,81 +206,51 @@ export function MessageThread({
                 </Button>
               </div>
             ) : null}
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                width: "100%",
-                position: "relative",
-              }}
-            >
-              {virtualizer.getVirtualItems().map((item) => {
-                const m = messages[item.index];
-                if (!m) return null;
-                return (
-                  <div
-                    key={m.id}
-                    data-index={item.index}
-                    ref={virtualizer.measureElement}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      transform: `translateY(${item.start}px)`,
-                      paddingBottom: 10,
-                    }}
-                  >
-                    <div
-                      className={`msg-bubble max-w-[min(85%,36rem)] px-3 py-2 text-[14.5px] leading-[1.4] ${
-                        m.direction === "outbound"
-                          ? "msg-out ml-auto"
-                          : "msg-in"
-                      }`}
-                    >
-                      {isMedia(m.type) ? (
-                        <MessageMedia
-                          message={m}
-                          onContentReady={() => {
-                            const already = measuredMediaRef.current.has(m.id);
-                            if (!already) measuredMediaRef.current.add(m.id);
-                            requestAnimationFrame(() => {
-                              if (!already) virtualizer.measure();
-                              const el = parentRef.current;
-                              if (el && stickToBottomRef.current) {
-                                el.scrollTop = el.scrollHeight;
-                              }
-                            });
-                          }}
-                        />
-                      ) : (
-                        <div className="wa-text break-words whitespace-pre-wrap">
-                          <WhatsAppText text={m.body} />
-                        </div>
-                      )}
-                      <div
-                        className={`mt-1 flex items-center justify-end gap-1 text-[10px] leading-none ${
-                          m.direction === "outbound"
-                            ? "text-white/70"
-                            : "text-[var(--muted)]"
-                        }`}
-                      >
-                        <span>
-                          {new Date(m.created_at).toLocaleTimeString("es", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </span>
-                        {m.template_name ? (
-                          <span>· {m.template_name}</span>
-                        ) : null}
-                        {m.direction === "outbound" ? (
-                          <MessageStatusIcon status={m.status} />
-                        ) : null}
-                      </div>
+            <div className="flex flex-col gap-2.5">
+              {messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`msg-bubble max-w-[min(85%,36rem)] px-3 py-2 text-[14.5px] leading-[1.4] ${
+                    m.direction === "outbound"
+                      ? "msg-out ml-auto"
+                      : "msg-in"
+                  }`}
+                >
+                  {isMedia(m.type) ? (
+                    <MessageMedia
+                      message={m}
+                      onContentReady={() => {
+                        if (stickToBottomRef.current) {
+                          requestAnimationFrame(() => scrollToBottom());
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className="wa-text break-words whitespace-pre-wrap">
+                      <WhatsAppText text={m.body} />
                     </div>
+                  )}
+                  <div
+                    className={`mt-1 flex items-center justify-end gap-1 text-[10px] leading-none ${
+                      m.direction === "outbound"
+                        ? "text-white/70"
+                        : "text-[var(--muted)]"
+                    }`}
+                  >
+                    <span>
+                      {new Date(m.created_at).toLocaleTimeString("es", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                    {m.template_name ? <span>· {m.template_name}</span> : null}
+                    {m.direction === "outbound" ? (
+                      <MessageStatusIcon status={m.status} />
+                    ) : null}
                   </div>
-                );
-              })}
+                </div>
+              ))}
+              <div ref={bottomRef} aria-hidden className="h-px w-full" />
             </div>
           </>
         )}
@@ -288,7 +264,10 @@ export function MessageThread({
           </div>
         ) : null}
         <div className={`chat-composer ${!canText ? "opacity-60" : ""}`}>
-          <EmojiPicker disabled={!canText || mediaSending} onPick={onInsertEmoji} />
+          <EmojiPicker
+            disabled={!canText || mediaSending}
+            onPick={onInsertEmoji}
+          />
           <input
             ref={fileInputRef}
             type="file"
