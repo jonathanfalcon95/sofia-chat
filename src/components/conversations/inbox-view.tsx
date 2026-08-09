@@ -418,9 +418,8 @@ export function InboxView({
 
   function openConversation(id: string) {
     setPickedId(id);
-    if (window.matchMedia("(max-width: 900px)").matches) {
-      router.push(`/conversations/${id}`);
-    }
+    // Always sync URL so deep-link/refresh keep the same chat open.
+    router.push(`/conversations/${id}`);
   }
 
   function backToList() {
@@ -805,10 +804,10 @@ export function InboxView({
           </div>
         </section>
 
-        <section className="chat-pane chat-pane-thread">
+        <section className="chat-pane chat-pane-thread min-h-0">
           {active ? (
-            <>
-              <header className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2.5 sm:px-4 sm:py-3">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <header className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2.5 sm:px-4 sm:py-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <button
                     type="button"
@@ -867,7 +866,11 @@ export function InboxView({
                 onInsertEmoji={insertEmoji}
                 onResizeComposer={resizeComposer}
               />
-            </>
+            </div>
+          ) : activeId ? (
+            <div className="m-auto flex items-center gap-2 p-6 text-[var(--muted)]">
+              <Loader2 className="h-4 w-4 animate-spin" /> Cargando conversación…
+            </div>
           ) : (
             <div className="m-auto hidden items-center gap-2 p-6 text-[var(--muted)] sm:flex">
               <Loader2 className="h-4 w-4" /> Selecciona una conversación

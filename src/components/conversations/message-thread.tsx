@@ -61,6 +61,7 @@ export function MessageThread({
   const prevCountRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const measuredMediaRef = useRef(new Set<string>());
   const [recording, setRecording] = useState(false);
 
   const virtualizer = useVirtualizer({
@@ -165,7 +166,7 @@ export function MessageThread({
     ["image", "audio", "video", "document", "sticker"].includes(t);
 
   return (
-    <>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         ref={parentRef}
         onScroll={handleScroll}
@@ -207,7 +208,8 @@ export function MessageThread({
               }}
             >
               {virtualizer.getVirtualItems().map((item) => {
-                const m = messages[item.index]!;
+                const m = messages[item.index];
+                if (!m) return null;
                 return (
                   <div
                     key={m.id}
@@ -233,7 +235,15 @@ export function MessageThread({
                         <MessageMedia
                           message={m}
                           onContentReady={() => {
-                            requestAnimationFrame(() => virtualizer.measure());
+                            const already = measuredMediaRef.current.has(m.id);
+                            if (!already) measuredMediaRef.current.add(m.id);
+                            requestAnimationFrame(() => {
+                              if (!already) virtualizer.measure();
+                              const el = parentRef.current;
+                              if (el && stickToBottomRef.current) {
+                                el.scrollTop = el.scrollHeight;
+                              }
+                            });
                           }}
                         />
                       ) : (
@@ -270,7 +280,7 @@ export function MessageThread({
         )}
       </div>
 
-      <footer className="chat-composer-footer border-t border-[var(--line)] bg-[var(--surface)] px-3 py-3 sm:px-4">
+      <footer className="chat-composer-footer shrink-0 border-t border-[var(--line)] bg-[var(--surface)] px-3 py-3 sm:px-4">
         {!canText ? (
           <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
             {windowHint}. WhatsApp solo permite mensajes libres dentro de las
@@ -364,6 +374,6 @@ export function MessageThread({
           </p>
         ) : null}
       </footer>
-    </>
+    </div>
   );
 }

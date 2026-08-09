@@ -61,8 +61,11 @@ export function MessageMedia({
             src={src}
             alt={m.body || "Imagen"}
             className={`max-h-64 max-w-full object-contain ${
-              type === "sticker" ? "max-h-40" : ""
+              type === "sticker" ? "max-h-32" : ""
             }`}
+            style={{ maxHeight: type === "sticker" ? 128 : 256 }}
+            loading="lazy"
+            decoding="async"
             onLoad={() => onContentReady?.()}
             onError={() => {
               setFailed(true);

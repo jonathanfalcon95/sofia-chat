@@ -41,7 +41,12 @@ function parseBlocks(input: string): ReactNode[] {
   return nodes;
 }
 
-function parseInline(input: string, keyPrefix: string): ReactNode[] {
+function parseInline(
+  input: string,
+  keyPrefix: string,
+  depth = 0,
+): ReactNode[] {
+  if (depth > 4) return [input];
   // Bold / italic / strike / inline code (non-greedy, same-line)
   const re =
     /(\*[^*\n]+?\*|_[^_\n]+?_|~[^~\n]+?~|`[^`\n]+`)/g;
@@ -70,19 +75,19 @@ function parseInline(input: string, keyPrefix: string): ReactNode[] {
     } else if (token.startsWith("*")) {
       nodes.push(
         <strong key={k} className="font-semibold">
-          {parseInline(inner, `${k}-i`)}
+          {parseInline(inner, `${k}-i`, depth + 1)}
         </strong>,
       );
     } else if (token.startsWith("_")) {
       nodes.push(
         <em key={k} className="italic">
-          {parseInline(inner, `${k}-i`)}
+          {parseInline(inner, `${k}-i`, depth + 1)}
         </em>,
       );
     } else if (token.startsWith("~")) {
       nodes.push(
         <span key={k} className="line-through opacity-90">
-          {parseInline(inner, `${k}-i`)}
+          {parseInline(inner, `${k}-i`, depth + 1)}
         </span>,
       );
     }

@@ -188,8 +188,14 @@ button {
   border-top-left-radius: 4px;
 }
 
+.chat-pane-thread {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chat-thread {
   background: var(--surface-2);
+  min-height: 0;
 }
 
 @media (min-width: 901px) {
