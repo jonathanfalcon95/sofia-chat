@@ -120,7 +120,17 @@ export function extractInboundMedia(msg: Record<string, unknown>): {
   const body =
     caption ||
     filename ||
-    (type === "audio" ? "Nota de voz" : `[${type}]`);
+    (type === "audio"
+      ? "Nota de voz"
+      : type === "image"
+        ? "Imagen"
+        : type === "video"
+          ? "Video"
+          : type === "sticker"
+            ? "Sticker"
+            : type === "document"
+              ? "Documento"
+              : `[${type}]`);
 
   return {
     type: type as MediaKind,

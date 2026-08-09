@@ -230,7 +230,12 @@ export function MessageThread({
                       }`}
                     >
                       {isMedia(m.type) ? (
-                        <MessageMedia message={m} />
+                        <MessageMedia
+                          message={m}
+                          onContentReady={() => {
+                            requestAnimationFrame(() => virtualizer.measure());
+                          }}
+                        />
                       ) : (
                         <div className="wa-text break-words whitespace-pre-wrap">
                           <WhatsAppText text={m.body} />

@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Enrich inbound media fields (link/mime/filename) that the RPC may omit.
+  // Enrich inbound media fields (link/mime/filename) that older RPC paths omit.
   if (
     eventType === "whatsapp.inbound_message.received" ||
     eventType === "whatsapp.inbound.message"
@@ -62,9 +62,11 @@ export async function POST(request: Request) {
       payload.whatsappMessage) as Record<string, unknown> | undefined;
     if (msg) {
       const media = extractInboundMedia(msg);
-      const ycloudId = String(msg.id ?? msg.wamid ?? "");
-      if (media && ycloudId) {
-        await supabase
+      const ids = [msg.id, msg.wamid]
+        .map((v) => (v == null ? "" : String(v)))
+        .filter(Boolean);
+      if (media?.mediaUrl && ids.length > 0) {
+        const { error: mediaError } = await supabase
           .from("messages")
           .update({
             type: media.type,
@@ -74,7 +76,10 @@ export async function POST(request: Request) {
             media_filename: media.mediaFilename,
             media_sha256: media.mediaSha256,
           })
-          .eq("ycloud_message_id", ycloudId);
+          .in("ycloud_message_id", ids);
+        if (mediaError) {
+          console.error("webhook media enrich error", mediaError);
+        }
       }
     }
   }

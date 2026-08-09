@@ -7,8 +7,8 @@ import {
   X,
 } from "lucide-react";
 
-export function MessageStatusIcon({ status }: { status: string }) {
-  const s = status.toLowerCase();
+export function MessageStatusIcon({ status }: { status: string | null | undefined }) {
+  const s = (status || "").toLowerCase();
   if (s === "pending") {
     return <Clock className="h-3 w-3 opacity-80" aria-label="Enviando" />;
   }
