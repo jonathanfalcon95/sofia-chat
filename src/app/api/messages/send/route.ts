@@ -72,7 +72,7 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             error:
-              "Fuera de la ventana de 24h. Usa una plantilla preaprobada para iniciar o reabrir el chat.",
+              "Fuera de la ventana de 24h. El contacto debe escribir primero para reabrir el chat.",
           },
           { status: 400 },
         );

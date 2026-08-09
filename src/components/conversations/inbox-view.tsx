@@ -28,7 +28,6 @@ import {
   assignConversation,
   createTicket,
   setConversationTag,
-  startConversationWithTemplate,
 } from "@/app/actions/conversations";
 import { setContactTags } from "@/app/actions/tags";
 import { Button } from "@/components/ui/button";
@@ -102,7 +101,7 @@ export function InboxView({
   agents,
   tags,
   contactTags = [],
-  inboxes,
+  inboxes: _inboxes,
   selectedId,
   currentUserId,
 }: {
@@ -129,6 +128,7 @@ export function InboxView({
   selectedId?: string;
   currentUserId?: string;
 }) {
+  void _inboxes;
   const [conversations, setConversations] = useState(initialConversations);
   const [activeId, setActiveId] = useState(
     selectedId || initialConversations[0]?.id,
@@ -136,15 +136,8 @@ export function InboxView({
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [loadingThread, setLoadingThread] = useState(false);
-  const [sending, setSending] = useState(false);
   const [text, setText] = useState("");
-  const [templateName, setTemplateName] = useState("");
-  const [templates, setTemplates] = useState<
-    Array<{ name?: string; language?: string }>
-  >([]);
   const [pending, startTransition] = useTransition();
-  const [newPhone, setNewPhone] = useState("");
-  const [newInboxId, setNewInboxId] = useState(inboxes[0]?.id ?? "");
   const [note, setNote] = useState("");
   const [ticketOpen, setTicketOpen] = useState(false);
   const [ticketTitle, setTicketTitle] = useState("");
@@ -156,6 +149,7 @@ export function InboxView({
   const [assigneeFilter, setAssigneeFilter] =
     useState<AssigneeFilter>("all");
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -399,26 +393,28 @@ export function InboxView({
   }, [activeId]);
 
   useEffect(() => {
-    fetch("/api/templates")
-      .then((r) => r.json())
-      .then((data) => {
-        const items = Array.isArray(data.items) ? data.items : [];
-        setTemplates(
-          items.map((t: Record<string, unknown>) => ({
-            name: String(t.name ?? t.templateName ?? ""),
-            language:
-              typeof t.language === "string"
-                ? t.language
-                : String(
-                    (t.language as { code?: string } | undefined)?.code ?? "es",
-                  ),
-          })),
-        );
-      })
-      .catch(() => setTemplates([]));
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
   }, []);
 
-  const canText = isWithinCustomerWindow(active?.window_expires_at);
+  const canText = useMemo(
+    () => isWithinCustomerWindow(active?.window_expires_at),
+    [active?.window_expires_at, nowMs],
+  );
+
+  const windowHint = useMemo(() => {
+    if (!active?.window_expires_at) {
+      return "Sin ventana activa: espera un mensaje del contacto";
+    }
+    const expires = new Date(active.window_expires_at);
+    if (expires.getTime() <= nowMs) {
+      return "Ventana de 24h cerrada: el contacto debe escribir primero";
+    }
+    return `Ventana abierta · cierra ${formatDistanceToNow(expires, {
+      addSuffix: true,
+      locale: es,
+    })}`;
+  }, [active?.window_expires_at, nowMs]);
 
   function focusComposer() {
     requestAnimationFrame(() => {
@@ -497,38 +493,6 @@ export function InboxView({
         toast.error(e instanceof Error ? e.message : "No se pudo enviar");
       }
     })();
-  }
-
-  async function sendTemplate() {
-    if (!active || !templateName.trim()) return;
-    setSending(true);
-    try {
-      const res = await fetch("/api/messages/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversationId: active.id,
-          mode: "template",
-          templateName,
-          languageCode: "es",
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error al enviar");
-      if (data.message) {
-        setMessages((prev) =>
-          prev.some((m) => m.id === data.message.id)
-            ? prev
-            : [...prev, data.message],
-        );
-      }
-      toast.success("Plantilla enviada");
-      focusComposer();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "No se pudo enviar");
-    } finally {
-      setSending(false);
-    }
   }
 
   useEffect(() => {
@@ -656,72 +620,6 @@ export function InboxView({
                   ))}
               </div>
             ) : null}
-            <p className="pt-1 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
-              Iniciar conversación
-            </p>
-            <Select
-              value={newInboxId}
-              onChange={(e) => setNewInboxId(e.target.value)}
-            >
-              {inboxes.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name} ({i.phone_number})
-                </option>
-              ))}
-            </Select>
-            <Input
-              placeholder="Teléfono destino +58..."
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-            />
-            <Input
-              placeholder="Plantilla para iniciar"
-              value={templateName}
-              onChange={(e) => setTemplateName(e.target.value)}
-              list="template-list"
-            />
-            <datalist id="template-list">
-              {templates.map((t) => (
-                <option key={`${t.name}-${t.language}`} value={t.name} />
-              ))}
-            </datalist>
-            <Button
-              className="w-full"
-              loading={pending}
-              disabled={!newPhone || !templateName}
-              onClick={() =>
-                startTransition(async () => {
-                  try {
-                    const result = await startConversationWithTemplate({
-                      inboxId: newInboxId,
-                      contactPhone: newPhone,
-                      templateName,
-                    });
-                    const res = await fetch("/api/messages/send", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        conversationId: result.conversationId,
-                        mode: "template",
-                        templateName,
-                        languageCode: "es",
-                      }),
-                    });
-                    const data = await res.json();
-                    if (!res.ok) throw new Error(data.error);
-                    toast.success("Chat iniciado");
-                    setActiveId(result.conversationId);
-                    await reloadConversations();
-                  } catch (e) {
-                    toast.error(
-                      e instanceof Error ? e.message : "No se pudo iniciar",
-                    );
-                  }
-                })
-              }
-            >
-              Iniciar con plantilla
-            </Button>
           </div>
 
           <div className="flex-1 overflow-auto">
@@ -821,6 +719,7 @@ export function InboxView({
                       ? "border-emerald-500/30 text-emerald-400"
                       : "border-amber-500/30 text-amber-400"
                   }
+                  title={windowHint}
                 >
                   {canText ? "Ventana 24h abierta" : "Ventana 24h cerrada"}
                 </Badge>
@@ -878,6 +777,12 @@ export function InboxView({
               </div>
 
               <footer className="space-y-2 border-t border-[var(--line)] p-4">
+                {!canText ? (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                    {windowHint}. WhatsApp solo permite mensajes libres dentro
+                    de las 24h desde el último mensaje entrante del contacto.
+                  </div>
+                ) : null}
                 <div className="flex items-start gap-2">
                   <EmojiPicker disabled={!canText} onPick={insertEmoji} />
                   <Textarea
@@ -887,7 +792,7 @@ export function InboxView({
                     placeholder={
                       canText
                         ? "Escribe un mensaje... (Enter envía, Shift+Enter salto de línea)"
-                        : "Fuera de ventana: usa plantilla"
+                        : "Chat bloqueado hasta que el contacto escriba"
                     }
                     value={text}
                     onChange={(e) => setText(e.target.value)}
@@ -895,27 +800,12 @@ export function InboxView({
                     disabled={!canText}
                   />
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex justify-end">
                   <Button
                     onClick={() => sendTextOptimistic()}
                     disabled={!canText || !text.trim()}
                   >
                     <Send className="h-4 w-4" /> Enviar
-                  </Button>
-                  <Input
-                    className="min-w-[160px] flex-1"
-                    placeholder="Nombre plantilla"
-                    value={templateName}
-                    onChange={(e) => setTemplateName(e.target.value)}
-                    list="template-list"
-                  />
-                  <Button
-                    variant="secondary"
-                    disabled={!templateName || sending}
-                    loading={sending}
-                    onClick={() => void sendTemplate()}
-                  >
-                    Plantilla
                   </Button>
                 </div>
               </footer>
