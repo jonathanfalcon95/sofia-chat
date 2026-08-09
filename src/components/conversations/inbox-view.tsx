@@ -24,6 +24,10 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { isWithinCustomerWindow } from "@/lib/utils";
 import {
+  rememberMediaPreview,
+  takeMediaPreview,
+} from "@/lib/media-preview-cache";
+import {
   PRIORITY_LABELS,
   TICKET_PRIORITIES,
   type TicketPriority,
@@ -253,17 +257,32 @@ export function InboxView({
 
   const onMessage = useCallback((msg: MessageRow) => {
     setMessages((prev) => {
-      if (prev.some((m) => m.id === msg.id)) return prev;
+      const cached = takeMediaPreview(msg.id);
+      const enriched: MessageRow = cached
+        ? { ...msg, localPreviewUrl: cached }
+        : msg;
+      if (prev.some((m) => m.id === enriched.id)) {
+        return prev.map((m) =>
+          m.id === enriched.id
+            ? {
+                ...m,
+                ...enriched,
+                localPreviewUrl: m.localPreviewUrl || enriched.localPreviewUrl,
+              }
+            : m,
+        );
+      }
       const withoutDupPending = prev.filter(
         (m) =>
           !(
             m.id.startsWith("temp-") &&
             m.direction === "outbound" &&
-            msg.direction === "outbound" &&
-            m.body === msg.body
+            enriched.direction === "outbound" &&
+            m.body === enriched.body &&
+            m.type === enriched.type
           ),
       );
-      return [...withoutDupPending, msg];
+      return [...withoutDupPending, enriched];
     });
   }, []);
 
@@ -359,7 +378,10 @@ export function InboxView({
           .order("created_at", { ascending: false }),
       ]);
       if (cancelled) return;
-      const page = ((msgs as MessageRow[]) ?? []).slice().reverse();
+      const page = ((msgs as MessageRow[]) ?? []).slice().reverse().map((m) => {
+        const cached = takeMediaPreview(m.id);
+        return cached ? { ...m, localPreviewUrl: cached } : m;
+      });
       setMessages(page);
       setHasMoreMessages((msgs?.length ?? 0) >= MESSAGE_PAGE_SIZE);
       setNotes(
@@ -586,11 +608,23 @@ export function InboxView({
       setMessages((prev) => {
         const withoutTemp = prev.filter((m) => m.id !== tempId);
         if (data.message) {
-          const msg = {
+          const msgId = String((data.message as MessageRow).id);
+          rememberMediaPreview(msgId, localPreviewUrl);
+          const msg: MessageRow = {
             ...(data.message as MessageRow),
             localPreviewUrl,
           };
-          if (withoutTemp.some((m) => m.id === msg.id)) return withoutTemp;
+          if (withoutTemp.some((m) => m.id === msg.id)) {
+            return withoutTemp.map((m) =>
+              m.id === msg.id
+                ? {
+                    ...m,
+                    ...msg,
+                    localPreviewUrl: localPreviewUrl || m.localPreviewUrl,
+                  }
+                : m,
+            );
+          }
           return [...withoutTemp, msg];
         }
         return withoutTemp.map((m) =>

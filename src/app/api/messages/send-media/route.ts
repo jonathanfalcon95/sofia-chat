@@ -21,6 +21,10 @@ const KIND_TO_WA: Record<"image" | "audio" | "document", "image" | "audio" | "do
     document: "document",
   };
 
+function storageMediaUrl(path: string) {
+  return `storage:chat-media/${path}`;
+}
+
 export async function POST(request: Request) {
   const session = await getAppSession();
   if (!session) {
@@ -55,6 +59,18 @@ export async function POST(request: Request) {
   if (kind === "video" || kind === "sticker") {
     return NextResponse.json(
       { error: "Este tipo de archivo no se puede enviar desde el chat aún." },
+      { status: 400 },
+    );
+  }
+
+  // YCloud/WhatsApp reject browser webm; client must send ogg/opus (or mpeg/mp4/aac/amr).
+  const mimeRaw = (file.type || "").toLowerCase().split(";")[0]!.trim();
+  if (mimeRaw.startsWith("audio/webm") || mimeRaw === "video/webm") {
+    return NextResponse.json(
+      {
+        error:
+          "Formato de audio no soportado (webm). Usa la nota de voz del chat (OGG/Opus).",
+      },
       { status: 400 },
     );
   }
@@ -111,7 +127,7 @@ export async function POST(request: Request) {
   }
 
   const waType = KIND_TO_WA[kind as "image" | "audio" | "document"];
-  const mime = file.type || "application/octet-stream";
+  const mime = mimeRaw || "application/octet-stream";
   const filename = file.name || `file.${mime.split("/")[1] || "bin"}`;
 
   try {
@@ -145,6 +161,22 @@ export async function POST(request: Request) {
           : filename);
 
     const admin = createAdminClient();
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const objectPath = `${conversation.company_id}/${conversationId}/${crypto.randomUUID()}-${filename.replace(/[^\w.\-]+/g, "_")}`;
+
+    let mediaUrl: string | null = null;
+    const { error: uploadError } = await admin.storage
+      .from("chat-media")
+      .upload(objectPath, bytes, {
+        contentType: mime,
+        upsert: false,
+      });
+    if (!uploadError) {
+      mediaUrl = storageMediaUrl(objectPath);
+    } else {
+      console.error("chat-media storage upload failed", uploadError);
+    }
+
     const { data: message, error: msgError } = await admin
       .from("messages")
       .insert({
@@ -158,9 +190,13 @@ export async function POST(request: Request) {
         sent_by: session.userId,
         media_mime: mime,
         media_filename: filename,
-        // Proxy serves by message id; store YCloud media id for reference.
-        media_url: null,
-        raw_payload: { upload: uploaded.raw, send: ycloudRes, mediaId: uploaded.id },
+        media_url: mediaUrl,
+        raw_payload: {
+          upload: uploaded.raw,
+          send: ycloudRes,
+          mediaId: uploaded.id,
+          storagePath: objectPath,
+        },
       })
       .select("*")
       .single();
@@ -169,8 +205,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
-    // For outbound, we don't have a durable YCloud download link immediately.
-    // Re-fetch is not always available; store a synthetic marker for UI via type/mime.
     await admin
       .from("conversations")
       .update({

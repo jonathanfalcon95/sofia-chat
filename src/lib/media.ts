@@ -15,7 +15,6 @@ export const OUTBOUND_AUDIO_MIMES = [
   "audio/mp4",
   "audio/aac",
   "audio/amr",
-  "audio/webm",
 ] as const;
 export const OUTBOUND_DOCUMENT_MIMES = ["application/pdf"] as const;
 
@@ -52,12 +51,14 @@ export function validateOutboundFile(file: {
   let kind: MediaKind | null = null;
 
   if ((OUTBOUND_IMAGE_MIMES as readonly string[]).includes(mime)) kind = "image";
-  else if (
-    (OUTBOUND_AUDIO_MIMES as readonly string[]).includes(mime) ||
-    mime === "audio/ogg" ||
-    mime.startsWith("audio/webm")
-  ) {
+  else if ((OUTBOUND_AUDIO_MIMES as readonly string[]).includes(mime)) {
     kind = "audio";
+  } else if (mime.startsWith("audio/webm") || mime === "video/webm") {
+    return {
+      ok: false,
+      error:
+        "WhatsApp no acepta audio/webm. Graba la nota de voz desde el micrófono del chat.",
+    };
   } else if ((OUTBOUND_DOCUMENT_MIMES as readonly string[]).includes(mime)) {
     kind = "document";
   }

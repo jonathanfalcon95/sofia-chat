@@ -11,6 +11,7 @@ import { WhatsAppText } from "@/components/conversations/whatsapp-text";
 import { MessageStatusIcon } from "@/components/conversations/message-status-icon";
 import { MessageMedia } from "@/components/conversations/message-media";
 import { validateOutboundFile } from "@/lib/media";
+import { createVoiceRecorder } from "@/lib/voice-recorder";
 import type { MessageRow } from "@/lib/conversations/types";
 
 const EmojiPicker = dynamic(
@@ -61,8 +62,13 @@ export function MessageThread({
   const prevCountRef = useRef(0);
   const prevFirstIdRef = useRef<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const mimeRef = useRef("audio/ogg");
+  const tickRef = useRef<number | null>(null);
   const [recording, setRecording] = useState(false);
+  const [recordSecs, setRecordSecs] = useState(0);
+  const [preparingMic, setPreparingMic] = useState(false);
 
   function scrollToBottom(behavior: ScrollBehavior = "auto") {
     const el = parentRef.current;
@@ -103,7 +109,13 @@ export function MessageThread({
 
   useEffect(() => {
     return () => {
-      recorderRef.current?.stop();
+      if (tickRef.current) window.clearInterval(tickRef.current);
+      try {
+        recorderRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
@@ -133,40 +145,75 @@ export function MessageThread({
     }
   }
 
+  function stopRecordingUi() {
+    setRecording(false);
+    setRecordSecs(0);
+    if (tickRef.current) {
+      window.clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+  }
+
   async function toggleRecording() {
     if (recording) {
-      recorderRef.current?.stop();
-      setRecording(false);
+      try {
+        recorderRef.current?.stop();
+      } catch {
+        stopRecordingUi();
+      }
       return;
     }
+    if (preparingMic || mediaSending) return;
+
     try {
+      setPreparingMic(true);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
-        ? "audio/ogg;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      streamRef.current = stream;
+      const { recorder, mimeType } = await createVoiceRecorder(stream);
+      mimeRef.current = mimeType;
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
+      recorder.onerror = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        stopRecordingUi();
+        toast.error("Error al grabar audio");
+      };
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: mime });
-        const ext = mime.includes("ogg") ? "ogg" : "webm";
-        const file = new File([blob], `voice-${Date.now()}.${ext}`, {
-          type: mime.split(";")[0],
+        streamRef.current = null;
+        stopRecordingUi();
+        const blobType = mimeType.split(";")[0] || "audio/ogg";
+        const blob = new Blob(chunksRef.current, { type: blobType });
+        if (blob.size < 256) {
+          toast.error("Grabación demasiado corta");
+          return;
+        }
+        const file = new File([blob], `voice-${Date.now()}.ogg`, {
+          type: "audio/ogg",
         });
         void onPickFile(file);
       };
       recorderRef.current = recorder;
-      recorder.start();
+      recorder.start(250);
       setRecording(true);
-    } catch {
-      toast.error("No se pudo acceder al micrófono");
+      setRecordSecs(0);
+      tickRef.current = window.setInterval(() => {
+        setRecordSecs((s) => s + 1);
+      }, 1000);
+    } catch (e) {
+      toast.error(
+        e instanceof Error
+          ? e.message
+          : "No se pudo acceder al micrófono",
+      );
+    } finally {
+      setPreparingMic(false);
     }
   }
+
+  const recordLabel = `${String(Math.floor(recordSecs / 60)).padStart(2, "0")}:${String(recordSecs % 60).padStart(2, "0")}`;
 
   const isMedia = (t: string) =>
     ["image", "audio", "video", "document", "sticker"].includes(t);
@@ -263,9 +310,34 @@ export function MessageThread({
             24h desde el último mensaje entrante del contacto.
           </div>
         ) : null}
-        <div className={`chat-composer ${!canText ? "opacity-60" : ""}`}>
+        {recording ? (
+          <div className="mb-2 flex items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5">
+            <span className="relative flex h-3 w-3">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-red-600 dark:text-red-300">
+                Grabando nota de voz…
+              </p>
+              <p className="font-mono text-xs text-[var(--muted)]">
+                {recordLabel} · toca el cuadrado para enviar
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-full bg-red-500 text-white hover:bg-red-600"
+              aria-label="Detener y enviar nota de voz"
+              onClick={() => void toggleRecording()}
+            >
+              <Square className="h-4 w-4 fill-current" />
+            </Button>
+          </div>
+        ) : null}
+        <div className={`chat-composer ${!canText || recording ? "opacity-60" : ""}`}>
           <EmojiPicker
-            disabled={!canText || mediaSending}
+            disabled={!canText || mediaSending || recording}
             onPick={onInsertEmoji}
           />
           <input
@@ -283,7 +355,7 @@ export function MessageThread({
             type="button"
             variant="ghost"
             size="icon"
-            disabled={!canText || mediaSending}
+            disabled={!canText || mediaSending || recording || preparingMic}
             className="h-9 w-9 shrink-0 rounded-full border-0 text-[var(--muted)]"
             aria-label="Adjuntar archivo"
             title="Imagen o PDF"
@@ -295,17 +367,19 @@ export function MessageThread({
             type="button"
             variant="ghost"
             size="icon"
-            disabled={!canText || mediaSending}
+            disabled={!canText || mediaSending || preparingMic}
             className={`h-9 w-9 shrink-0 rounded-full border-0 ${
               recording
                 ? "bg-red-500/15 text-red-500"
                 : "text-[var(--muted)]"
             }`}
             aria-label={recording ? "Detener grabación" : "Nota de voz"}
-            title={recording ? "Detener" : "Nota de voz"}
+            title={recording ? "Detener y enviar" : "Nota de voz (OGG)"}
             onClick={() => void toggleRecording()}
           >
-            {recording ? (
+            {preparingMic ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : recording ? (
               <Square className="h-4 w-4" />
             ) : (
               <Mic className="h-4 w-4" />
@@ -346,7 +420,7 @@ export function MessageThread({
             )}
           </Button>
         </div>
-        {canText ? (
+        {canText && !recording ? (
           <p className="mt-1.5 px-1 text-[10px] text-[var(--muted)]">
             Enter envía · Shift+Enter salto · micrófono nota de voz · clip
             imagen/PDF

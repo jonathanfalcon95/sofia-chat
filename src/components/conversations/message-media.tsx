@@ -3,10 +3,13 @@
 import { useState } from "react";
 import { FileText, Mic, X } from "lucide-react";
 import type { MessageRow } from "@/lib/conversations/types";
+import { takeMediaPreview } from "@/lib/media-preview-cache";
 
 function mediaSrc(m: MessageRow) {
   if (m.localPreviewUrl) return m.localPreviewUrl;
-  // Only proxy when we have a durable YCloud download link (inbound).
+  const cached = takeMediaPreview(m.id);
+  if (cached) return cached;
+  // YCloud download link or storage:chat-media/... (served by proxy).
   if (m.media_url) return `/api/media/${m.id}`;
   return null;
 }
@@ -119,14 +122,13 @@ export function MessageMedia({
           controls
           preload="metadata"
           className="w-full max-w-[260px]"
+          src={src}
           onLoadedMetadata={() => onContentReady?.()}
           onError={() => {
             setFailed(true);
             onContentReady?.();
           }}
-        >
-          <source src={src} type={m.media_mime || undefined} />
-        </audio>
+        />
         {m.body && m.body !== "Nota de voz" ? (
           <div className="mt-1 text-xs opacity-80">{m.body}</div>
         ) : null}

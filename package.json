@@ -29,6 +29,7 @@
     "lucide-react": "^1.30.0",
     "next": "16.3.0",
     "next-themes": "^0.4.6",
+    "opus-media-recorder": "^0.8.0",
     "pg": "^8.22.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",

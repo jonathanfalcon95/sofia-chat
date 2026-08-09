@@ -1,9 +1,18 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { downloadYCloudMedia } from "@/lib/ycloud/client";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@/lib/media";
 
 export const runtime = "nodejs";
+
+function parseStorageRef(mediaUrl: string): { bucket: string; path: string } | null {
+  if (!mediaUrl.startsWith("storage:")) return null;
+  const rest = mediaUrl.slice("storage:".length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return null;
+  return { bucket: rest.slice(0, slash), path: rest.slice(slash + 1) };
+}
 
 export async function GET(
   _request: Request,
@@ -24,7 +33,7 @@ export async function GET(
 
   const { data: message, error } = await supabase
     .from("messages")
-    .select("id, media_url, media_mime, type, body")
+    .select("id, media_url, media_mime, type, body, media_filename")
     .eq("id", messageId)
     .maybeSingle();
 
@@ -49,6 +58,37 @@ export async function GET(
   const maxBytes = maxBytesForKind(kind, true);
 
   try {
+    const storageRef = parseStorageRef(message.media_url);
+    if (storageRef) {
+      const admin = createAdminClient();
+      const { data: file, error: dlError } = await admin.storage
+        .from(storageRef.bucket)
+        .download(storageRef.path);
+      if (dlError || !file) {
+        return NextResponse.json(
+          { error: dlError?.message || "storage_missing" },
+          { status: 404 },
+        );
+      }
+      if (file.size > maxBytes) {
+        return NextResponse.json({ error: "file_too_large" }, { status: 413 });
+      }
+      const buf = Buffer.from(await file.arrayBuffer());
+      return new NextResponse(buf, {
+        status: 200,
+        headers: {
+          "Content-Type": message.media_mime || file.type || mimeHint,
+          "Cache-Control": "private, max-age=300",
+          "Content-Length": String(buf.byteLength),
+          ...(message.media_filename
+            ? {
+                "Content-Disposition": `inline; filename="${message.media_filename.replace(/"/g, "")}"`,
+              }
+            : {}),
+        },
+      });
+    }
+
     const upstream = await downloadYCloudMedia(message.media_url);
     if (!upstream.ok) {
       return NextResponse.json(
