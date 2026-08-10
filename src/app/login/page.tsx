@@ -49,70 +49,87 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="relative grid min-h-screen place-items-center overflow-hidden px-4 py-10">
+    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[#070b14] px-4 py-12 text-[#e8eef9]">
+      {/* Background ambient lighting */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0"
+        className="pointer-events-none absolute -top-40 left-1/2 h-[500px] w-[700px] -translate-x-1/2 bg-[radial-gradient(ellipse_at_center,rgba(0,150,255,0.18)_0%,rgba(0,82,204,0.08)_50%,transparent_70%)] blur-2xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -bottom-40 right-10 h-[400px] w-[500px] bg-[radial-gradient(ellipse_at_center,rgba(0,82,204,0.15)_0%,transparent_70%)] blur-2xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-20"
         style={{
-          background:
-            "linear-gradient(145deg, #0096ff 0%, #0052cc 48%, #0b1220 100%)",
+          backgroundImage:
+            "radial-gradient(rgba(255,255,255,0.15) 1px, transparent 1px)",
+          backgroundSize: "28px 24px",
         }}
       />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -top-24 -left-16 h-72 w-72 rounded-full bg-white/20 blur-3xl"
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -right-20 bottom-0 h-80 w-80 rounded-full bg-[#0096ff]/35 blur-3xl"
-      />
 
+      {/* Login Card */}
       <form
         onSubmit={onSubmit}
         aria-busy={loading}
-        className="relative w-full max-w-md space-y-7 overflow-hidden rounded-2xl border border-white/40 bg-white p-8 shadow-[0_20px_60px_rgba(11,18,32,0.28)] sm:p-10"
+        className="relative z-10 w-full max-w-md space-y-6 overflow-hidden rounded-2xl border border-[#1e293b] bg-[#0b1220]/90 p-8 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] shadow-black/60 backdrop-blur-xl sm:p-10"
       >
+        {/* Loading Overlay */}
         {loading ? (
           <div
-            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white/90 backdrop-blur-[2px]"
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-2xl bg-[#0b1220]/95 backdrop-blur-md text-[#e8eef9]"
             role="status"
             aria-live="polite"
           >
-            <Loader2
-              className="h-10 w-10 animate-spin text-[var(--accent)]"
-              aria-hidden
-            />
-            <p className="text-sm font-semibold text-[var(--ink)]">
+            <div className="relative flex items-center justify-center">
+              <div
+                className="absolute h-12 w-12 rounded-full bg-[#0096ff]/20 animate-ping"
+                aria-hidden
+              />
+              <Loader2
+                className="h-10 w-10 animate-spin text-[#0096ff]"
+                aria-hidden
+              />
+            </div>
+            <p className="text-base font-semibold tracking-wide text-[#e8eef9]">
               Entrando…
             </p>
-            <p className="text-xs text-[var(--muted)]">Preparando tu inbox</p>
+            <p className="text-xs text-[#93a4c3]">Preparando tu inbox</p>
           </div>
         ) : null}
 
-        <div className="flex flex-col items-center gap-4 text-center">
-          <div className="flex w-full justify-center rounded-xl bg-[#0b1220] px-4 py-5 sm:px-6 sm:py-6">
+        {/* Brand Header & Logo */}
+        <div className="flex flex-col items-center space-y-3 text-center">
+          <div className="flex w-full items-center justify-center py-2">
             <Image
               src="/sofia-logo.webp"
-              alt="sofIA"
-              width={420}
-              height={160}
-              className="h-auto w-full max-w-[320px] object-contain sm:max-w-[360px]"
+              alt="Sofia Chat"
+              width={320}
+              height={120}
+              className="h-auto w-full max-w-[260px] object-contain mix-blend-screen drop-shadow-[0_0_25px_rgba(0,150,255,0.3)] sm:max-w-[290px]"
               priority
             />
           </div>
-          <div className="space-y-1.5">
-            <h1 className="text-3xl font-bold tracking-tight text-[var(--ink)]">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-bold tracking-tight text-[#e8eef9]">
               Sofia Chat
             </h1>
-            <p className="text-sm text-[var(--muted)]">
+            <p className="text-xs text-[#93a4c3]">
               Inbox WhatsApp multi-empresa
             </p>
           </div>
         </div>
 
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+        {/* Inputs */}
+        <div className="space-y-4 pt-2">
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="email"
+              className="text-xs font-semibold uppercase tracking-wider text-[#93a4c3]"
+            >
+              Email
+            </Label>
             <Input
               id="email"
               type="email"
@@ -121,11 +138,18 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={loading}
+              className="h-11 rounded-xl border-[#1e293b] bg-[#05070d]/80 text-sm text-[#e8eef9] placeholder:text-[#5b6b86] focus-visible:border-[#0096ff] focus-visible:ring-2 focus-visible:ring-[#0096ff]/30"
               required
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Contraseña</Label>
+
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="password"
+              className="text-xs font-semibold uppercase tracking-wider text-[#93a4c3]"
+            >
+              Contraseña
+            </Label>
             <div className="relative">
               <Input
                 id="password"
@@ -134,7 +158,7 @@ export default function LoginPage() {
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="pr-10"
+                className="h-11 rounded-xl border-[#1e293b] bg-[#05070d]/80 pr-10 text-sm text-[#e8eef9] placeholder:text-[#5b6b86] focus-visible:border-[#0096ff] focus-visible:ring-2 focus-visible:ring-[#0096ff]/30"
                 disabled={loading}
                 required
               />
@@ -142,7 +166,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
                 disabled={loading}
-                className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-1 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-50"
+                className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-lg p-1.5 text-[#93a4c3] transition hover:bg-[#121a2b] hover:text-[#e8eef9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0096ff]/40 disabled:pointer-events-none disabled:opacity-50"
                 aria-label={
                   showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
                 }
@@ -157,7 +181,12 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <Button type="submit" className="w-full" size="lg" loading={loading}>
+        {/* Submit Button */}
+        <Button
+          type="submit"
+          className="h-11 w-full rounded-xl bg-gradient-to-r from-[#0096ff] to-[#0052cc] text-sm font-semibold text-white shadow-lg shadow-[#0096ff]/20 transition hover:opacity-90 active:scale-[0.99] disabled:opacity-50"
+          loading={loading}
+        >
           {loading ? "Entrando…" : "Entrar"}
         </Button>
       </form>
