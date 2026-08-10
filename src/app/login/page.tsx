@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -40,8 +40,8 @@ export default function LoginPage() {
       .limit(1)
       .maybeSingle();
 
-    setLoading(false);
     toast.success("Bienvenido a Sofia Chat");
+    // Keep loader visible until navigation completes.
     router.replace(
       firstChat?.id ? `/conversations/${firstChat.id}` : "/conversations",
     );
@@ -52,31 +52,54 @@ export default function LoginPage() {
     <main className="relative grid min-h-screen place-items-center overflow-hidden px-4 py-10">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(0,150,255,0.18),_transparent_55%),radial-gradient(ellipse_at_bottom_right,_rgba(0,82,204,0.12),_transparent_50%),var(--bg)]"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(145deg, #0096ff 0%, #0052cc 48%, #0b1220 100%)",
+        }}
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.35]"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle at 1px 1px, rgba(0,82,204,0.12) 1px, transparent 0)",
-          backgroundSize: "24px 24px",
-        }}
+        className="pointer-events-none absolute -top-24 -left-16 h-72 w-72 rounded-full bg-white/20 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-20 bottom-0 h-80 w-80 rounded-full bg-[#0096ff]/35 blur-3xl"
       />
 
       <form
         onSubmit={onSubmit}
-        className="relative w-full max-w-md space-y-7 rounded-2xl border border-[var(--line)] bg-[var(--surface)]/95 p-8 shadow-[var(--shadow)] backdrop-blur-sm sm:p-10"
+        aria-busy={loading}
+        className="relative w-full max-w-md space-y-7 overflow-hidden rounded-2xl border border-white/40 bg-white p-8 shadow-[0_20px_60px_rgba(11,18,32,0.28)] sm:p-10"
       >
+        {loading ? (
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white/90 backdrop-blur-[2px]"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2
+              className="h-10 w-10 animate-spin text-[var(--accent)]"
+              aria-hidden
+            />
+            <p className="text-sm font-semibold text-[var(--ink)]">
+              Entrando…
+            </p>
+            <p className="text-xs text-[var(--muted)]">Preparando tu inbox</p>
+          </div>
+        ) : null}
+
         <div className="flex flex-col items-center gap-4 text-center">
-          <Image
-            src="/sofia-logo.webp"
-            alt="sofIA"
-            width={112}
-            height={112}
-            className="h-28 w-28 object-contain"
-            priority
-          />
+          <div className="flex w-full justify-center rounded-xl bg-[#0b1220] px-4 py-5 sm:px-6 sm:py-6">
+            <Image
+              src="/sofia-logo.webp"
+              alt="sofIA"
+              width={420}
+              height={160}
+              className="h-auto w-full max-w-[320px] object-contain sm:max-w-[360px]"
+              priority
+            />
+          </div>
           <div className="space-y-1.5">
             <h1 className="text-3xl font-bold tracking-tight text-[var(--ink)]">
               Sofia Chat
@@ -97,6 +120,7 @@ export default function LoginPage() {
               placeholder="tu@empresa.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              disabled={loading}
               required
             />
           </div>
@@ -111,12 +135,14 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="pr-10"
+                disabled={loading}
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
-                className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-1 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                disabled={loading}
+                className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-1 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-50"
                 aria-label={
                   showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
                 }
@@ -132,7 +158,7 @@ export default function LoginPage() {
         </div>
 
         <Button type="submit" className="w-full" size="lg" loading={loading}>
-          Entrar
+          {loading ? "Entrando…" : "Entrar"}
         </Button>
       </form>
     </main>
