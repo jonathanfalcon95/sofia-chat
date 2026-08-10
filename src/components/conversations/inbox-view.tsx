@@ -318,38 +318,73 @@ export function InboxView({
     }, 300);
   }, [reloadConversations]);
 
-  const onMessage = useCallback((msg: MessageRow) => {
-    // Reactions update metadata on the target message; never render as bubbles.
-    if (msg.type === "reaction") return;
-    setMessages((prev) => {
-      const cached = takeMediaPreview(msg.id);
-      const enriched: MessageRow = cached
-        ? { ...msg, localPreviewUrl: cached }
-        : msg;
-      if (prev.some((m) => m.id === enriched.id)) {
-        return prev.map((m) =>
-          m.id === enriched.id
-            ? {
-                ...m,
-                ...enriched,
-                localPreviewUrl: m.localPreviewUrl || enriched.localPreviewUrl,
-              }
-            : m,
-        );
-      }
-      const withoutDupPending = prev.filter(
-        (m) =>
-          !(
-            m.id.startsWith("temp-") &&
-            m.direction === "outbound" &&
-            enriched.direction === "outbound" &&
-            m.body === enriched.body &&
-            m.type === enriched.type
-          ),
-      );
-      return [...withoutDupPending, enriched];
-    });
+  const markConversationRead = useCallback((conversationId: string) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === conversationId && c.unread_count !== 0
+          ? { ...c, unread_count: 0 }
+          : c,
+      ),
+    );
+    void createClient()
+      .from("conversations")
+      .update({ unread_count: 0 })
+      .eq("id", conversationId)
+      .then(({ error }) => {
+        if (error) {
+          console.error("Failed to mark conversation read", error);
+        }
+      });
   }, []);
+
+  // Persist read state on every open path (click, deep-link, desktop redirect, refresh).
+  useEffect(() => {
+    if (!activeId) return;
+    markConversationRead(activeId);
+  }, [activeId, markConversationRead]);
+
+  const onMessage = useCallback(
+    (msg: MessageRow) => {
+      // Reactions update metadata on the target message; never render as bubbles.
+      if (msg.type === "reaction") return;
+      // Webhook increments unread_count even while the thread is open — clear it.
+      if (
+        msg.direction === "inbound" &&
+        msg.conversation_id === activeIdRef.current
+      ) {
+        markConversationRead(msg.conversation_id);
+      }
+      setMessages((prev) => {
+        const cached = takeMediaPreview(msg.id);
+        const enriched: MessageRow = cached
+          ? { ...msg, localPreviewUrl: cached }
+          : msg;
+        if (prev.some((m) => m.id === enriched.id)) {
+          return prev.map((m) =>
+            m.id === enriched.id
+              ? {
+                  ...m,
+                  ...enriched,
+                  localPreviewUrl: m.localPreviewUrl || enriched.localPreviewUrl,
+                }
+              : m,
+          );
+        }
+        const withoutDupPending = prev.filter(
+          (m) =>
+            !(
+              m.id.startsWith("temp-") &&
+              m.direction === "outbound" &&
+              enriched.direction === "outbound" &&
+              m.body === enriched.body &&
+              m.type === enriched.type
+            ),
+        );
+        return [...withoutDupPending, enriched];
+      });
+    },
+    [markConversationRead],
+  );
 
   const onConversationChange = useCallback(
     (patch: {
@@ -357,10 +392,17 @@ export function InboxView({
       last_message_at?: string | null;
       last_message_preview?: string | null;
       unread_count?: number;
+      bump_unread?: boolean;
       window_expires_at?: string | null;
       assignee_id?: string | null;
       status?: string;
     }) => {
+      const { bump_unread, unread_count, ...rest } = patch;
+      const isActive = patch.id === activeIdRef.current;
+      // Webhook bumps unread on every inbound; if the thread is open, persist read.
+      if (isActive && ((unread_count ?? 0) > 0 || bump_unread)) {
+        markConversationRead(patch.id);
+      }
       setConversations((prev) => {
         const exists = prev.some((c) => c.id === patch.id);
         if (!exists) {
@@ -368,20 +410,23 @@ export function InboxView({
           return prev;
         }
         return prev
-          .map((c) =>
-            c.id === patch.id
-              ? {
-                  ...c,
-                  ...patch,
-                  unread_count:
-                    patch.unread_count === undefined
-                      ? c.id === activeId
-                        ? 0
-                        : Math.max(c.unread_count, 1)
-                      : patch.unread_count,
-                }
-              : c,
-          )
+          .map((c) => {
+            if (c.id !== patch.id) return c;
+            // Open thread stays read even if the webhook just incremented DB unread.
+            let nextUnread = c.unread_count;
+            if (isActive) {
+              nextUnread = 0;
+            } else if (unread_count !== undefined) {
+              nextUnread = unread_count;
+            } else if (bump_unread) {
+              nextUnread = c.unread_count + 1;
+            }
+            return {
+              ...c,
+              ...rest,
+              unread_count: nextUnread,
+            };
+          })
           .sort((a, b) => {
             const ta = a.last_message_at
               ? new Date(a.last_message_at).getTime()
@@ -393,7 +438,7 @@ export function InboxView({
           });
       });
     },
-    [activeId, queueReloadConversations],
+    [markConversationRead, queueReloadConversations],
   );
 
   useRealtimeInbox({
@@ -402,18 +447,6 @@ export function InboxView({
     onConversationChange,
     onReloadConversations: queueReloadConversations,
   });
-
-  const markConversationRead = useCallback((conversationId: string) => {
-    void createClient()
-      .from("conversations")
-      .update({ unread_count: 0 })
-      .eq("id", conversationId);
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === conversationId ? { ...c, unread_count: 0 } : c,
-      ),
-    );
-  }, []);
 
   const loadNotesInBackground = useCallback(async (conversationId: string) => {
     if (!conversationId) return;

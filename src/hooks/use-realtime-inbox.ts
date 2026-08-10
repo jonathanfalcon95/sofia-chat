@@ -23,6 +23,8 @@ type ConversationPatch = {
   last_message_at?: string | null;
   last_message_preview?: string | null;
   unread_count?: number;
+  /** Optimistic +1 for inbound on a non-active thread (until conversations UPDATE). */
+  bump_unread?: boolean;
   window_expires_at?: string | null;
   assignee_id?: string | null;
   status?: string;
@@ -90,22 +92,20 @@ export function useRealtimeInbox({
           if (!msg?.conversation_id) return;
           // Reactions are metadata on another message — never preview/notify.
           if (msg.type === "reaction") return;
-          // Active thread inserts are handled by the dedicated thread channel.
-          if (msg.conversation_id === activeIdRef.current) {
-            onConversationChangeRef.current({
-              id: msg.conversation_id,
-              last_message_at: msg.created_at,
-              last_message_preview: msg.body,
-              unread_count: 0,
-            });
-          } else {
-            onConversationChangeRef.current({
-              id: msg.conversation_id,
-              last_message_at: msg.created_at,
-              last_message_preview: msg.body,
-              unread_count: undefined,
-            });
-          }
+          const isActive = msg.conversation_id === activeIdRef.current;
+          // Preview updates only. Unread for non-active inbound comes from the
+          // conversations UPDATE (webhook). Active threads stay read (0).
+          // Do NOT bump unread on outbound — that falsely marked chats unread.
+          onConversationChangeRef.current({
+            id: msg.conversation_id,
+            last_message_at: msg.created_at,
+            last_message_preview: msg.body,
+            ...(isActive
+              ? { unread_count: 0 }
+              : msg.direction === "inbound"
+                ? { bump_unread: true }
+                : {}),
+          });
           if (msg.direction === "inbound") {
             emitSofiaNotify({
               type: "message",
