@@ -3,13 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Pencil, Plus } from "lucide-react";
-import { createInbox, updateInbox } from "@/app/actions/admin";
+import { Pencil, RefreshCw } from "lucide-react";
+import { syncYCloudInboxes, updateInbox } from "@/app/actions/admin";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -24,7 +23,7 @@ type Inbox = {
   name: string;
   phone_number: string;
   is_active: boolean;
-  company_id: string;
+  company_id: string | null;
   ycloud_phone_number_id: string | null;
   waba_id: string | null;
   companies: { name: string } | null;
@@ -32,25 +31,42 @@ type Inbox = {
 
 export function InboxesManager({
   inboxes,
-  companies,
+  canSync,
 }: {
   inboxes: Inbox[];
-  companies: Array<{ id: string; name: string }>;
+  canSync: boolean;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Inbox | null>(null);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  async function onSync() {
+    setSyncing(true);
+    try {
+      const result = await syncYCloudInboxes();
+      toast.success(
+        `Sync OK: ${result.created} nuevos, ${result.updated} actualizados (${result.total} en YCloud)`,
+      );
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Error al sincronizar");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   return (
     <div>
       <PageHeader
         title="Inboxes"
-        description="Números WhatsApp de YCloud por empresa"
+        description="Números WhatsApp sincronizados desde YCloud"
         actions={
-          <Button onClick={() => setOpen(true)}>
-            <Plus className="h-4 w-4" /> Nuevo inbox
-          </Button>
+          canSync ? (
+            <Button onClick={onSync} loading={syncing}>
+              <RefreshCw className="h-4 w-4" /> Sincronizar con YCloud
+            </Button>
+          ) : null
         }
       />
       <Table>
@@ -59,6 +75,8 @@ export function InboxesManager({
             <TH>Nombre</TH>
             <TH>Número</TH>
             <TH>Empresa</TH>
+            <TH>YCloud ID</TH>
+            <TH>WABA</TH>
             <TH>Estado</TH>
             <TH />
           </TR>
@@ -68,83 +86,27 @@ export function InboxesManager({
             <TR key={i.id}>
               <TD className="font-medium">{i.name}</TD>
               <TD>{i.phone_number}</TD>
-              <TD>{i.companies?.name}</TD>
+              <TD>{i.companies?.name ?? "Sin asignar"}</TD>
+              <TD className="max-w-[140px] truncate text-xs text-[var(--muted)]">
+                {i.ycloud_phone_number_id || "—"}
+              </TD>
+              <TD className="max-w-[120px] truncate text-xs text-[var(--muted)]">
+                {i.waba_id || "—"}
+              </TD>
               <TD>
                 <Badge>{i.is_active ? "Activo" : "Inactivo"}</Badge>
               </TD>
               <TD>
-                <Button size="sm" variant="ghost" onClick={() => setEditing(i)}>
-                  <Pencil className="h-3.5 w-3.5" /> Editar
-                </Button>
+                {canSync ? (
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(i)}>
+                    <Pencil className="h-3.5 w-3.5" /> Editar
+                  </Button>
+                ) : null}
               </TD>
             </TR>
           ))}
         </TBody>
       </Table>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Nuevo inbox</DialogTitle>
-          </DialogHeader>
-          <form
-            className="space-y-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setLoading(true);
-              const form = new FormData(e.currentTarget);
-              try {
-                await createInbox({
-                  companyId: String(form.get("companyId")),
-                  name: String(form.get("name")),
-                  phoneNumber: String(form.get("phoneNumber")),
-                  ycloudPhoneNumberId: String(
-                    form.get("ycloudPhoneNumberId") || "",
-                  ),
-                  wabaId: String(form.get("wabaId") || ""),
-                });
-                toast.success("Inbox creado");
-                setOpen(false);
-                router.refresh();
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : "Error");
-              } finally {
-                setLoading(false);
-              }
-            }}
-          >
-            <div className="space-y-1.5">
-              <Label>Empresa</Label>
-              <Select name="companyId" required>
-                {companies.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Nombre</Label>
-              <Input name="name" required />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Teléfono E.164</Label>
-              <Input name="phoneNumber" required placeholder="+58..." />
-            </div>
-            <div className="space-y-1.5">
-              <Label>YCloud Phone Number ID</Label>
-              <Input name="ycloudPhoneNumberId" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>WABA ID</Label>
-              <Input name="wabaId" />
-            </div>
-            <Button type="submit" className="w-full" loading={loading}>
-              Crear
-            </Button>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent>
@@ -161,14 +123,8 @@ export function InboxesManager({
                 try {
                   await updateInbox({
                     id: editing.id,
-                    companyId: editing.company_id,
                     name: String(form.get("name")),
-                    phoneNumber: String(form.get("phoneNumber")),
                     isActive: form.get("isActive") === "on",
-                    ycloudPhoneNumberId: String(
-                      form.get("ycloudPhoneNumberId") || "",
-                    ),
-                    wabaId: String(form.get("wabaId") || ""),
                   });
                   toast.success("Inbox actualizado");
                   setEditing(null);
@@ -186,23 +142,11 @@ export function InboxesManager({
               </div>
               <div className="space-y-1.5">
                 <Label>Teléfono</Label>
-                <Input
-                  name="phoneNumber"
-                  defaultValue={editing.phone_number}
-                  required
-                />
+                <Input value={editing.phone_number} disabled />
               </div>
-              <div className="space-y-1.5">
-                <Label>YCloud Phone Number ID</Label>
-                <Input
-                  name="ycloudPhoneNumberId"
-                  defaultValue={editing.ycloud_phone_number_id || ""}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>WABA ID</Label>
-                <Input name="wabaId" defaultValue={editing.waba_id || ""} />
-              </div>
+              <p className="text-xs text-[var(--muted)]">
+                La empresa se asigna desde el CRUD de Empresas.
+              </p>
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"

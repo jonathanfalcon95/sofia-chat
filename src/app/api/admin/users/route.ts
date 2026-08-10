@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Debes asignar al menos un inbox. Si la empresa no tiene inboxes, créalos antes.",
+          "Debes asignar al menos un inbox. Si la empresa no tiene números, asígnalos en Empresas.",
       },
       { status: 400 },
     );
@@ -51,11 +51,12 @@ export async function POST(request: Request) {
 
   const admin = createAdminClient();
 
-  // Validate inboxes belong to the company
+  // Validate inboxes belong to the company and are active
   const { data: validInboxes, error: inboxCheckError } = await admin
     .from("inboxes")
     .select("id")
     .eq("company_id", companyId)
+    .eq("is_active", true)
     .in("id", inboxIds);
 
   if (inboxCheckError) {

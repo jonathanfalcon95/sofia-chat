@@ -9,7 +9,11 @@ export default async function UsersPage() {
     await Promise.all([
       supabase.from("companies").select("id, name").order("name"),
       supabase.from("roles").select("id, name, company_id").not("company_id", "is", null),
-      supabase.from("inboxes").select("id, name, company_id, phone_number"),
+      supabase
+        .from("inboxes")
+        .select("id, name, company_id, phone_number, is_active")
+        .not("company_id", "is", null)
+        .eq("is_active", true),
       supabase
         .from("company_memberships")
         .select(

@@ -209,8 +209,38 @@ export async function listWhatsAppTemplates(params?: {
   );
 }
 
-export async function listWhatsAppPhoneNumbers() {
-  return ycloudFetch<{ items?: unknown[]; data?: unknown[] }>(
-    "/whatsapp/phoneNumbers",
+export type YCloudPhoneNumber = {
+  id: string;
+  phoneNumber?: string;
+  displayPhoneNumber?: string;
+  wabaId?: string;
+  verifiedName?: string;
+  newName?: string;
+  status?: string;
+};
+
+export type YCloudPhoneNumberPage = {
+  items?: YCloudPhoneNumber[];
+  data?: YCloudPhoneNumber[];
+  offset?: number;
+  limit?: number;
+  length?: number;
+  total?: number;
+};
+
+export async function listWhatsAppPhoneNumbers(params?: {
+  page?: number;
+  limit?: number;
+  includeTotal?: boolean;
+  wabaId?: string;
+}) {
+  const search = new URLSearchParams();
+  if (params?.page) search.set("page", String(params.page));
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.includeTotal) search.set("includeTotal", "true");
+  if (params?.wabaId) search.set("filter.wabaId", params.wabaId);
+  const qs = search.toString();
+  return ycloudFetch<YCloudPhoneNumberPage>(
+    `/whatsapp/phoneNumbers${qs ? `?${qs}` : ""}`,
   );
 }

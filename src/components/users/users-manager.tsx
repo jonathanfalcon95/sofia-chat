@@ -43,6 +43,7 @@ export function UsersManager({
     name: string;
     company_id: string;
     phone_number: string;
+    is_active?: boolean;
   }>;
   memberships: Membership[];
 }) {
@@ -60,18 +61,21 @@ export function UsersManager({
     () => inboxes.filter((i) => i.company_id === companyId),
     [inboxes, companyId],
   );
+  const singleCreateInbox = companyInboxes.length === 1;
 
   async function onCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
     const form = new FormData(e.currentTarget);
-    const inboxIds = companyInboxes
-      .filter((i) => form.get(`inbox_${i.id}`) === "on")
-      .map((i) => i.id);
+    const inboxIds = singleCreateInbox
+      ? [companyInboxes[0].id]
+      : companyInboxes
+          .filter((i) => form.get(`inbox_${i.id}`) === "on")
+          .map((i) => i.id);
 
     if (companyInboxes.length === 0) {
       toast.error(
-        "Esta empresa no tiene inboxes. Crea un inbox antes de asignar agentes.",
+        "Esta empresa no tiene números. Asígnalos en Empresas antes de crear usuarios.",
       );
       setLoading(false);
       return;
@@ -116,9 +120,19 @@ export function UsersManager({
     setLoading(true);
     const form = new FormData(e.currentTarget);
     const options = inboxes.filter((i) => i.company_id === editing.company_id);
-    const inboxIds = options
-      .filter((i) => form.get(`mi_${i.id}`) === "on")
-      .map((i) => i.id);
+    const inboxIds =
+      options.length === 1
+        ? [options[0].id]
+        : options
+            .filter((i) => form.get(`mi_${i.id}`) === "on")
+            .map((i) => i.id);
+    if (options.length === 0) {
+      toast.error(
+        "Esta empresa no tiene números. Asígnalos en Empresas antes de editar usuarios.",
+      );
+      setLoading(false);
+      return;
+    }
     if (inboxIds.length === 0) {
       toast.error("Selecciona al menos un inbox");
       setLoading(false);
@@ -261,9 +275,23 @@ export function UsersManager({
               <Label>Inboxes (obligatorio)</Label>
               {companyInboxes.length === 0 ? (
                 <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                  Esta empresa no tiene inboxes. Ve a Inboxes y crea al menos
-                  uno antes de crear agentes.
+                  Esta empresa no tiene números. Asígnalos en Empresas antes de
+                  crear usuarios.
                 </p>
+              ) : singleCreateInbox ? (
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name={`inbox_${companyInboxes[0].id}`}
+                    checked
+                    disabled
+                    readOnly
+                  />
+                  {companyInboxes[0].name} ({companyInboxes[0].phone_number})
+                  <span className="text-xs text-[var(--muted)]">
+                    (único · obligatorio)
+                  </span>
+                </label>
               ) : (
                 companyInboxes.map((i, idx) => (
                   <label key={i.id} className="flex items-center gap-2 text-sm">
@@ -277,7 +305,12 @@ export function UsersManager({
                 ))
               )}
             </div>
-            <Button type="submit" className="w-full" loading={loading}>
+            <Button
+              type="submit"
+              className="w-full"
+              loading={loading}
+              disabled={companyInboxes.length === 0}
+            >
               Crear
             </Button>
           </form>
@@ -326,9 +359,35 @@ export function UsersManager({
               </label>
               <div className="space-y-2">
                 <Label>Inboxes</Label>
-                {inboxes
-                  .filter((i) => i.company_id === editing.company_id)
-                  .map((i) => (
+                {(() => {
+                  const options = inboxes.filter(
+                    (i) => i.company_id === editing.company_id,
+                  );
+                  if (options.length === 0) {
+                    return (
+                      <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        Esta empresa no tiene números. Asígnalos en Empresas.
+                      </p>
+                    );
+                  }
+                  if (options.length === 1) {
+                    return (
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          name={`mi_${options[0].id}`}
+                          checked
+                          disabled
+                          readOnly
+                        />
+                        {options[0].name} ({options[0].phone_number})
+                        <span className="text-xs text-[var(--muted)]">
+                          (único · obligatorio)
+                        </span>
+                      </label>
+                    );
+                  }
+                  return options.map((i) => (
                     <label
                       key={i.id}
                       className="flex items-center gap-2 text-sm"
@@ -340,11 +399,20 @@ export function UsersManager({
                           (x) => x.inbox_id === i.id,
                         )}
                       />
-                      {i.name}
+                      {i.name} ({i.phone_number})
                     </label>
-                  ))}
+                  ));
+                })()}
               </div>
-              <Button type="submit" className="w-full" loading={loading}>
+              <Button
+                type="submit"
+                className="w-full"
+                loading={loading}
+                disabled={
+                  inboxes.filter((i) => i.company_id === editing.company_id)
+                    .length === 0
+                }
+              >
                 Guardar cambios
               </Button>
             </form>
