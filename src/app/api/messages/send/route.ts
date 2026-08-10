@@ -7,6 +7,7 @@ import {
   getAppSession,
   sessionHasPermission,
 } from "@/lib/rbac/session";
+import { logSystemError } from "@/lib/errors/log-system-error";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -111,6 +112,16 @@ export async function POST(request: Request) {
         .single();
 
       if (msgError) {
+        await logSystemError({
+          source: "api.messages.send",
+          message: "persist outbound text message failed",
+          error: msgError,
+          httpStatus: 500,
+          companyId: conversation.company_id as string,
+          userId: session.userId,
+          errorCode: "message_insert_failed",
+          context: { conversationId, mode: "text" },
+        });
         return NextResponse.json({ error: msgError.message }, { status: 500 });
       }
 
@@ -176,6 +187,16 @@ export async function POST(request: Request) {
       .single();
 
     if (msgError) {
+      await logSystemError({
+        source: "api.messages.send",
+        message: "persist outbound template message failed",
+        error: msgError,
+        httpStatus: 500,
+        companyId: conversation.company_id as string,
+        userId: session.userId,
+        errorCode: "message_insert_failed",
+        context: { conversationId, mode: "template", templateName },
+      });
       return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
@@ -191,6 +212,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ message, ycloud: ycloudRes });
   } catch (err) {
     const message = err instanceof Error ? err.message : "send_failed";
+    await logSystemError({
+      source: "api.messages.send",
+      message: "send message failed",
+      error: err,
+      httpStatus: 502,
+      companyId: conversation.company_id as string,
+      userId: session.userId,
+      errorCode: "send_failed",
+      context: { conversationId, mode },
+    });
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

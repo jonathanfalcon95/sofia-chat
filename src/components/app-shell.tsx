@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  AlertTriangle,
   Building2,
   Contact,
   Inbox,
@@ -70,6 +71,12 @@ const links: NavLink[] = [
     label: "Empresas",
     icon: Building2,
     permission: "companies.manage",
+  },
+  {
+    href: "/settings/error-logs",
+    label: "Errores",
+    icon: AlertTriangle,
+    permission: "error_logs.view",
   },
   {
     href: "/inboxes",

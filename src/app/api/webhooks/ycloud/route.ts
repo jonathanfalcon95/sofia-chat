@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyYCloudSignature } from "@/lib/ycloud/signature";
 import { extractInboundMedia } from "@/lib/media";
+import { logSystemError } from "@/lib/errors/log-system-error";
 
 export const runtime = "nodejs";
 
@@ -50,6 +51,14 @@ export async function POST(request: Request) {
 
   if (error) {
     console.error("webhook rpc error", error);
+    await logSystemError({
+      source: "api.webhooks.ycloud",
+      message: "process_ycloud_webhook failed",
+      error,
+      httpStatus: 500,
+      errorCode: "webhook_rpc_error",
+      context: { eventId, eventType },
+    });
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
@@ -79,6 +88,14 @@ export async function POST(request: Request) {
           .in("ycloud_message_id", ids);
         if (mediaError) {
           console.error("webhook media enrich error", mediaError);
+          await logSystemError({
+            source: "api.webhooks.ycloud",
+            message: "inbound media enrich failed",
+            error: mediaError,
+            level: "warn",
+            errorCode: "webhook_media_enrich_error",
+            context: { eventId, eventType, messageIds: ids },
+          });
         }
       }
     }

@@ -11,6 +11,7 @@ import {
   sessionHasPermission,
 } from "@/lib/rbac/session";
 import { validateOutboundFile, type MediaKind } from "@/lib/media";
+import { logSystemError } from "@/lib/errors/log-system-error";
 
 export const runtime = "nodejs";
 
@@ -175,6 +176,16 @@ export async function POST(request: Request) {
       mediaUrl = storageMediaUrl(objectPath);
     } else {
       console.error("chat-media storage upload failed", uploadError);
+      await logSystemError({
+        source: "api.messages.send-media",
+        message: "chat-media storage upload failed",
+        error: uploadError,
+        level: "warn",
+        companyId: conversation.company_id as string,
+        userId: session.userId,
+        errorCode: "storage_upload_failed",
+        context: { conversationId, objectPath, mime },
+      });
     }
 
     const { data: message, error: msgError } = await admin
@@ -202,6 +213,16 @@ export async function POST(request: Request) {
       .single();
 
     if (msgError) {
+      await logSystemError({
+        source: "api.messages.send-media",
+        message: "persist outbound media message failed",
+        error: msgError,
+        httpStatus: 500,
+        companyId: conversation.company_id as string,
+        userId: session.userId,
+        errorCode: "message_insert_failed",
+        context: { conversationId, waType },
+      });
       return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
@@ -216,6 +237,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ message, ycloud: ycloudRes });
   } catch (err) {
     const message = err instanceof Error ? err.message : "send_media_failed";
+    await logSystemError({
+      source: "api.messages.send-media",
+      message: "send media failed",
+      error: err,
+      httpStatus: 502,
+      companyId: conversation.company_id as string,
+      userId: session.userId,
+      errorCode: "send_media_failed",
+      context: { conversationId, kind },
+    });
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

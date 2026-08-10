@@ -15,6 +15,7 @@ export const PERMISSIONS = [
   "templates.send",
   "kanban.manage",
   "tags.manage",
+  "error_logs.view",
 ] as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[number];
@@ -36,4 +37,5 @@ export const PERMISSION_LABELS: Record<PermissionCode, string> = {
   "templates.send": "Enviar plantillas",
   "kanban.manage": "Administrar Kanban",
   "tags.manage": "Crear y gestionar tags de contacto",
+  "error_logs.view": "Ver log de errores del sistema",
 };
