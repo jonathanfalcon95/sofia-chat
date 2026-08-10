@@ -19,10 +19,19 @@ npm install
 npm run dev
 ```
 
-Usuario semilla:
+### Super Admin (bootstrap)
+
+Credenciales demo del super admin de plataforma (no se muestran en la UI de login):
 
 - Email: `admin@chatbase.local`
 - Password: `Admin123!`
+
+El seed SQL crea la empresa demo y roles, pero **no** crea el usuario en Supabase Auth ni marca el super admin. Para bootstrap:
+
+1. Crea el usuario en Supabase Dashboard → Authentication → Users (mismo email/password), o desde la UI de admin si ya tienes otro usuario con `SUPABASE_SERVICE_ROLE_KEY`.
+2. En la tabla `profiles`, pon `is_platform_admin = true` para ese usuario (`id` = UUID de Auth).
+
+Con eso el usuario entra como Super Admin de plataforma (acceso a todas las empresas y pantallas de admin).
 
 ## Webhook YCloud
 
