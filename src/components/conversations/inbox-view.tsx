@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useParams, useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -120,9 +120,14 @@ export function InboxView({
   children?: React.ReactNode;
 }) {
   const router = useRouter();
-  const params = useParams<{ id?: string }>();
-  const routeId =
-    typeof params?.id === "string" && params.id.length > 0 ? params.id : null;
+  // Read id from pathname: InboxView lives in conversations/layout, so
+  // useParams() does not see the child [id] segment and stays empty after login.
+  const pathname = usePathname();
+  const routeId = useMemo(() => {
+    const match = pathname?.match(/^\/conversations\/([^/]+)/);
+    const id = match?.[1];
+    return id && id.length > 0 ? id : null;
+  }, [pathname]);
 
   const [conversations, setConversations] = useState(initialConversations);
   const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
@@ -250,7 +255,7 @@ export function InboxView({
     return () => mq.removeEventListener("change", sync);
   }, []);
 
-  // Desktop first login: land on a deep-linked chat instead of an empty pane.
+  // Desktop: if we land on /conversations with no id, deep-link the first chat.
   useEffect(() => {
     if (routeId || pendingRouteId || isDesktop !== true || desktopRedirectRef.current) {
       return;
@@ -449,13 +454,6 @@ export function InboxView({
 
   const applyBootstrap = useCallback(
     (payload: ThreadBootstrapPayload) => {
-      // Only hydrate the thread the user is currently viewing (pending soft-switch or URL).
-      if (payload.conversationId !== activeIdRef.current) {
-        return;
-      }
-      const startedAt = openStartByConversationRef.current.get(
-        payload.conversationId,
-      );
       const nextMessages = enrichMessages(payload.messages);
       const cached = threadCacheRef.current.get(payload.conversationId);
       const nextNotes =
@@ -463,15 +461,25 @@ export function InboxView({
           ? payload.notes
           : cached?.notes ?? [];
 
-      setLoadingThread(false);
-      setMessages(nextMessages);
-      setHasMoreMessages(payload.hasMore);
-      setNotes(nextNotes);
       threadCacheRef.current.set(payload.conversationId, {
         messages: nextMessages,
         notes: nextNotes,
         hasMore: payload.hasMore,
       });
+
+      // Only paint the thread the user is currently viewing (pending soft-switch or URL).
+      if (payload.conversationId !== activeIdRef.current) {
+        return;
+      }
+
+      const startedAt = openStartByConversationRef.current.get(
+        payload.conversationId,
+      );
+
+      setLoadingThread(false);
+      setMessages(nextMessages);
+      setHasMoreMessages(payload.hasMore);
+      setNotes(nextNotes);
       markConversationRead(payload.conversationId);
       setPendingRouteId((prev) =>
         prev === payload.conversationId ? null : prev,
@@ -517,6 +525,11 @@ export function InboxView({
 
   useEffect(() => {
     if (!activeId) return;
+    // Avoid wiping a bootstrap/prefetch cache while the thread is still empty/loading.
+    if (messages.length === 0 && notes.length === 0) {
+      const existing = threadCacheRef.current.get(activeId);
+      if (existing?.messages?.length) return;
+    }
     threadCacheRef.current.set(activeId, {
       messages,
       notes,
