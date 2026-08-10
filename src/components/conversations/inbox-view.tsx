@@ -71,6 +71,7 @@ import {
   nowMs as perfNowMs,
   reportClientConversationMetric,
 } from "@/lib/conversations/perf";
+import { assigneeColor } from "@/lib/conversations/assignee-color";
 import {
   readSofiaStoppedAll,
   syncSofiaStoppedAllFromCommand,
@@ -1079,6 +1080,12 @@ export function InboxView({
               filteredConversations.map((c) => {
                 const contact = c.contacts;
                 const tag = c.conversation_tags?.[0]?.tags;
+                const assignee = c.assignee_id
+                  ? agents.find((a) => a.id === c.assignee_id)
+                  : null;
+                const assigneeBadgeColor = c.assignee_id
+                  ? assigneeColor(c.assignee_id)
+                  : null;
                 const activeRow = c.id === highlightedId;
                 const unread = c.unread_count > 0;
                 return (
@@ -1139,6 +1146,24 @@ export function InboxView({
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <Badge className="normal-case">{c.inboxes?.name}</Badge>
+                      {c.assignee_id && assigneeBadgeColor ? (
+                        <Badge
+                          className="normal-case"
+                          style={{
+                            background: `${assigneeBadgeColor}22`,
+                            color: assigneeBadgeColor,
+                            borderColor: `${assigneeBadgeColor}55`,
+                          }}
+                        >
+                          {assignee?.full_name ||
+                            assignee?.email ||
+                            "Agente"}
+                        </Badge>
+                      ) : (
+                        <Badge className="normal-case border-[var(--line)] bg-[var(--surface-2)] text-[var(--muted)]">
+                          Sin asignar
+                        </Badge>
+                      )}
                       {tag ? (
                         <Badge
                           style={{
