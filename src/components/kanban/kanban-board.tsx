@@ -38,6 +38,8 @@ export function KanbanBoard({
   }, [tags, items]);
 
   function onDrop(tagId: string, conversationId: string) {
+    const previousTagId =
+      items.find((c) => c.id === conversationId)?.tagId ?? null;
     setItems((prev) =>
       prev.map((c) => (c.id === conversationId ? { ...c, tagId } : c)),
     );
@@ -46,6 +48,11 @@ export function KanbanBoard({
         await setConversationTag(conversationId, tagId);
         toast.success("Contacto movido en el kanban");
       } catch (err) {
+        setItems((prev) =>
+          prev.map((c) =>
+            c.id === conversationId ? { ...c, tagId: previousTagId } : c,
+          ),
+        );
         toast.error(err instanceof Error ? err.message : "Error");
       }
     });

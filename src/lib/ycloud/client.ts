@@ -39,6 +39,8 @@ export type SendTextParams = {
   from: string;
   to: string;
   text: string;
+  /** WhatsApp wamid of the message being replied to. */
+  replyToWamid?: string;
 };
 
 export type SendTemplateParams = {
@@ -52,14 +54,18 @@ export type SendTemplateParams = {
 };
 
 export async function sendWhatsAppText(params: SendTextParams) {
+  const payload: Record<string, unknown> = {
+    from: params.from,
+    to: params.to,
+    type: "text",
+    text: { body: params.text },
+  };
+  if (params.replyToWamid) {
+    payload.context = { message_id: params.replyToWamid };
+  }
   return ycloudFetch<Record<string, unknown>>("/whatsapp/messages", {
     method: "POST",
-    body: JSON.stringify({
-      from: params.from,
-      to: params.to,
-      type: "text",
-      text: { body: params.text },
-    }),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -128,6 +134,7 @@ export async function sendWhatsAppMedia(params: {
   mediaId: string;
   caption?: string;
   filename?: string;
+  replyToWamid?: string;
 }) {
   const mediaBody: Record<string, unknown> = { id: params.mediaId };
   if (params.caption && params.type !== "audio") {
@@ -137,13 +144,38 @@ export async function sendWhatsAppMedia(params: {
     mediaBody.filename = params.filename;
   }
 
+  const payload: Record<string, unknown> = {
+    from: params.from,
+    to: params.to,
+    type: params.type,
+    [params.type]: mediaBody,
+  };
+  if (params.replyToWamid) {
+    payload.context = { message_id: params.replyToWamid };
+  }
+
   return ycloudFetch<Record<string, unknown>>("/whatsapp/messages", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function sendWhatsAppReaction(params: {
+  from: string;
+  to: string;
+  messageId: string;
+  emoji: string;
+}) {
+  return ycloudFetch<Record<string, unknown>>("/whatsapp/messages/sendDirectly", {
     method: "POST",
     body: JSON.stringify({
       from: params.from,
       to: params.to,
-      type: params.type,
-      [params.type]: mediaBody,
+      type: "reaction",
+      reaction: {
+        message_id: params.messageId,
+        emoji: params.emoji,
+      },
     }),
   });
 }

@@ -84,16 +84,24 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "empty_text" }, { status: 400 });
       }
 
+      const replyToWamid = String(body.replyToWamid ?? "").trim() || undefined;
+
       const ycloudRes = await sendWhatsAppText({
         from: inbox.phone_number,
         to: contact.phone_number,
         text,
+        replyToWamid,
       });
 
       const ycloudId =
         (ycloudRes.id as string | undefined) ||
         (ycloudRes.messageId as string | undefined) ||
         null;
+      const wamid =
+        (ycloudRes.wamid as string | undefined) ||
+        (typeof ycloudId === "string" && ycloudId.startsWith("wamid.")
+          ? ycloudId
+          : null);
 
       const { data: message, error: msgError } = await admin
         .from("messages")
@@ -104,6 +112,8 @@ export async function POST(request: Request) {
           type: "text",
           body: text,
           ycloud_message_id: ycloudId,
+          wamid,
+          reply_to_wamid: replyToWamid ?? null,
           status: "accepted",
           sent_by: session.userId,
           raw_payload: ycloudRes,

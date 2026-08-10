@@ -130,6 +130,7 @@ export async function POST(request: Request) {
   const waType = KIND_TO_WA[kind as "image" | "audio" | "document"];
   const mime = mimeRaw || "application/octet-stream";
   const filename = file.name || `file.${mime.split("/")[1] || "bin"}`;
+  const replyToWamid = String(form.get("replyToWamid") ?? "").trim() || undefined;
 
   try {
     const uploaded = await uploadWhatsAppMedia({
@@ -146,12 +147,18 @@ export async function POST(request: Request) {
       mediaId: uploaded.id,
       caption: caption || undefined,
       filename: waType === "document" ? filename : undefined,
+      replyToWamid,
     });
 
     const ycloudId =
       (ycloudRes.id as string | undefined) ||
       (ycloudRes.messageId as string | undefined) ||
       null;
+    const wamid =
+      (ycloudRes.wamid as string | undefined) ||
+      (typeof ycloudId === "string" && ycloudId.startsWith("wamid.")
+        ? ycloudId
+        : null);
 
     const preview =
       caption ||
@@ -197,6 +204,8 @@ export async function POST(request: Request) {
         type: waType,
         body: preview,
         ycloud_message_id: ycloudId,
+        wamid,
+        reply_to_wamid: replyToWamid ?? null,
         status: "accepted",
         sent_by: session.userId,
         media_mime: mime,

@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { listCompanyAgents } from "@/lib/agents";
-import { CONVERSATION_LIST_SELECT, MESSAGE_PAGE_SIZE } from "./types";
+import { CONVERSATION_LIST_SELECT, MESSAGE_PAGE_SIZE, MESSAGE_SELECT } from "./types";
 import { normalizeConversations, normalizeNotes } from "./normalize";
 import type { MessageRow } from "./types";
 import { nowMs, reportServerDuration } from "./perf";
@@ -66,9 +66,7 @@ export async function loadConversationDetailData(
   const messagesStartedAt = nowMs();
   const messagesQuery = supabase
     .from("messages")
-    .select(
-      "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename",
-    )
+    .select(MESSAGE_SELECT)
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: false })
     .limit(MESSAGE_PAGE_SIZE);

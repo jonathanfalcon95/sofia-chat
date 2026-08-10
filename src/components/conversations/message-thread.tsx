@@ -1,8 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
-import { Loader2, Mic, Paperclip, Send, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Loader2,
+  Mic,
+  Paperclip,
+  Reply,
+  Send,
+  SmilePlus,
+  Square,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -19,6 +28,18 @@ const EmojiPicker = dynamic(
     import("@/components/conversations/emoji-picker").then((m) => m.EmojiPicker),
   { ssr: false, loading: () => <span className="h-9 w-9" /> },
 );
+
+const REACTION_SET = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
+
+function isMedia(type: string) {
+  return ["image", "audio", "video", "document", "sticker"].includes(type);
+}
+
+function messageWamid(m: MessageRow) {
+  if (m.wamid) return m.wamid;
+  if (m.ycloud_message_id?.startsWith("wamid.")) return m.ycloud_message_id;
+  return null;
+}
 
 export function MessageThread({
   activeConversationId,
@@ -39,6 +60,9 @@ export function MessageThread({
   onInsertEmoji,
   onResizeComposer,
   onFirstPaint,
+  replyTo,
+  onReplyTo,
+  onReact,
 }: {
   activeConversationId: string;
   messages: MessageRow[];
@@ -58,6 +82,9 @@ export function MessageThread({
   onInsertEmoji: (emoji: string) => void;
   onResizeComposer: () => void;
   onFirstPaint?: (conversationId: string) => void;
+  replyTo: MessageRow | null;
+  onReplyTo: (message: MessageRow | null) => void;
+  onReact: (message: MessageRow, emoji: string) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -74,14 +101,23 @@ export function MessageThread({
   const [recording, setRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
   const [preparingMic, setPreparingMic] = useState(false);
+  const [menuMessageId, setMenuMessageId] = useState<string | null>(null);
+  const [reactPickerId, setReactPickerId] = useState<string | null>(null);
   const firstMessageId = messages[0]?.id;
   const lastMessageId = messages[messages.length - 1]?.id;
+
+  const byWamid = useMemo(() => {
+    const map = new Map<string, MessageRow>();
+    for (const m of messages) {
+      const id = messageWamid(m);
+      if (id) map.set(id, m);
+    }
+    return map;
+  }, [messages]);
 
   function scrollToBottom() {
     const el = parentRef.current;
     if (!el) return;
-    // Only scroll the thread scroller — scrollIntoView was jumping ancestors
-    // and making the chat look empty/flickery on first paint.
     el.scrollTop = el.scrollHeight;
   }
 
@@ -104,7 +140,6 @@ export function MessageThread({
     if (prepended) return;
     if (!stickToBottomRef.current && grew) return;
 
-    // Single rAF is enough; repeated timeouts caused visible flicker with media.
     const t0 = requestAnimationFrame(() => scrollToBottom());
     return () => cancelAnimationFrame(t0);
   }, [firstMessageId, lastMessageId, loadingThread, messages.length]);
@@ -202,45 +237,45 @@ export function MessageThread({
           return;
         }
         const file = new File([blob], `voice-${Date.now()}.ogg`, {
-          type: "audio/ogg",
+          type: blobType,
         });
         void onPickFile(file);
       };
       recorderRef.current = recorder;
       recorder.start(250);
+      setPreparingMic(false);
       setRecording(true);
       setRecordSecs(0);
-      tickRef.current = window.setInterval(() => {
-        setRecordSecs((s) => s + 1);
-      }, 1000);
-    } catch (e) {
-      toast.error(
-        e instanceof Error
-          ? e.message
-          : "No se pudo acceder al micrófono",
+      tickRef.current = window.setInterval(
+        () => setRecordSecs((s) => s + 1),
+        1000,
       );
-    } finally {
+    } catch {
       setPreparingMic(false);
+      toast.error("No se pudo acceder al micrófono");
     }
   }
 
-  const recordLabel = `${String(Math.floor(recordSecs / 60)).padStart(2, "0")}:${String(recordSecs % 60).padStart(2, "0")}`;
+  const recordLabel = `${String(Math.floor(recordSecs / 60)).padStart(2, "0")}:${String(
+    recordSecs % 60,
+  ).padStart(2, "0")}`;
 
-  const isMedia = (t: string) =>
-    ["image", "audio", "video", "document", "sticker"].includes(t);
+  function quotedPreview(m: MessageRow) {
+    return (m.body || m.template_name || m.type || "Mensaje").slice(0, 120);
+  }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div
         ref={parentRef}
         onScroll={handleScroll}
-        className="chat-thread min-h-0 flex-1 overflow-auto p-3 sm:p-4"
+        className="chat-thread-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4"
       >
         {loadingThread ? (
-          <div className="space-y-2.5">
-            <Skeleton className="h-14 w-2/3" />
-            <Skeleton className="ml-auto h-14 w-1/2" />
-            <Skeleton className="h-14 w-3/5" />
+          <div className="space-y-3 py-4">
+            <Skeleton className="h-12 w-2/3 rounded-2xl" />
+            <Skeleton className="ml-auto h-12 w-1/2 rounded-2xl" />
+            <Skeleton className="h-16 w-3/5 rounded-2xl" />
           </div>
         ) : (
           <>
@@ -267,59 +302,178 @@ export function MessageThread({
             <div className="flex flex-col gap-2.5">
               {messages.map((m) => {
                 const media = isMedia(m.type);
+                const quoted = m.reply_to_wamid
+                  ? byWamid.get(m.reply_to_wamid)
+                  : null;
+                const reactions = Array.isArray(m.reactions) ? m.reactions : [];
+                const ourReaction = reactions.find((r) => r.direction === "outbound");
+                const showMenu = menuMessageId === m.id;
+                const showReact = reactPickerId === m.id;
+
                 return (
                   <div
                     key={m.id}
-                    className={`msg-bubble text-[14.5px] leading-[1.4] ${
-                      media
-                        ? `msg-bubble-media ${
-                            m.type === "audio"
-                              ? "msg-bubble-audio"
-                              : m.type === "document"
-                                ? "msg-bubble-doc"
-                                : m.type === "sticker"
-                                  ? "msg-bubble-sticker"
-                                  : ""
-                          }`
-                        : "px-3 py-2"
-                    } ${
-                      m.direction === "outbound" ? "msg-out" : "msg-in"
+                    className={`group relative flex flex-col ${
+                      m.direction === "outbound" ? "items-end" : "items-start"
                     }`}
+                    onMouseLeave={() => {
+                      if (menuMessageId === m.id) setMenuMessageId(null);
+                      if (reactPickerId === m.id) setReactPickerId(null);
+                    }}
                   >
-                    {media ? (
-                      <MessageMedia
-                        message={m}
-                        onContentReady={() => {
-                          if (stickToBottomRef.current) {
-                            requestAnimationFrame(() => scrollToBottom());
-                          }
-                        }}
-                      />
-                    ) : (
-                      <div className="wa-text break-words whitespace-pre-wrap">
-                        <WhatsAppText text={m.body} />
-                      </div>
-                    )}
                     <div
-                      className={`mt-1 flex items-center justify-end gap-1 px-1 text-[10px] leading-none ${
-                        m.direction === "outbound"
-                          ? "text-white/70"
-                          : "text-[var(--muted)]"
-                      } ${m.type === "sticker" ? "px-0 text-[var(--muted)]" : ""}`}
+                      className={`msg-bubble text-[14.5px] leading-[1.4] ${
+                        media
+                          ? `msg-bubble-media ${
+                              m.type === "audio"
+                                ? "msg-bubble-audio"
+                                : m.type === "document"
+                                  ? "msg-bubble-doc"
+                                  : m.type === "sticker"
+                                    ? "msg-bubble-sticker"
+                                    : ""
+                            }`
+                          : "px-3 py-2"
+                      } ${m.direction === "outbound" ? "msg-out" : "msg-in"}`}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenuMessageId(m.id);
+                        setReactPickerId(null);
+                      }}
                     >
-                      <span>
-                        {new Date(m.created_at).toLocaleTimeString("es", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                      {m.template_name ? (
-                        <span>· {m.template_name}</span>
+                      {m.reply_to_wamid ? (
+                        <div
+                          className={`mb-1.5 rounded-md border-l-2 px-2 py-1 text-[12px] ${
+                            m.direction === "outbound"
+                              ? "border-white/50 bg-black/10 text-white/85"
+                              : "border-[var(--accent)] bg-[var(--surface-2)] text-[var(--muted)]"
+                          }`}
+                        >
+                          {quoted ? quotedPreview(quoted) : "Mensaje citado"}
+                        </div>
                       ) : null}
-                      {m.direction === "outbound" ? (
-                        <MessageStatusIcon status={m.status} />
-                      ) : null}
+                      {media ? (
+                        <MessageMedia
+                          message={m}
+                          onContentReady={() => {
+                            if (stickToBottomRef.current) {
+                              requestAnimationFrame(() => scrollToBottom());
+                            }
+                          }}
+                        />
+                      ) : (
+                        <div className="wa-text break-words whitespace-pre-wrap">
+                          <WhatsAppText text={m.body} />
+                        </div>
+                      )}
+                      <div
+                        className={`mt-1 flex items-center justify-end gap-1 px-1 text-[10px] leading-none ${
+                          m.direction === "outbound"
+                            ? "text-white/70"
+                            : "text-[var(--muted)]"
+                        } ${m.type === "sticker" ? "px-0 text-[var(--muted)]" : ""}`}
+                      >
+                        <span>
+                          {new Date(m.created_at).toLocaleTimeString("es", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                        {m.template_name ? (
+                          <span>· {m.template_name}</span>
+                        ) : null}
+                        {m.direction === "outbound" ? (
+                          <MessageStatusIcon status={m.status} />
+                        ) : null}
+                      </div>
                     </div>
+
+                    {reactions.length > 0 ? (
+                      <div className="mt-1 flex flex-wrap gap-1 px-1">
+                        {Object.entries(
+                          reactions.reduce<Record<string, number>>((acc, r) => {
+                            acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
+                            return acc;
+                          }, {}),
+                        ).map(([emoji, count]) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            disabled={!canText}
+                            onClick={() => {
+                              if (ourReaction?.emoji === emoji) {
+                                onReact(m, "");
+                              } else {
+                                onReact(m, emoji);
+                              }
+                            }}
+                            className={`rounded-full border px-1.5 py-0.5 text-xs ${
+                              ourReaction?.emoji === emoji
+                                ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                                : "border-[var(--line)] bg-[var(--surface)]"
+                            }`}
+                          >
+                            {emoji}
+                            {count > 1 ? ` ${count}` : ""}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <div
+                      className={`mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 ${
+                        showMenu || showReact ? "opacity-100" : ""
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        disabled={!canText}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
+                        onClick={() => {
+                          onReplyTo(m);
+                          setMenuMessageId(null);
+                          composerRef.current?.focus();
+                        }}
+                      >
+                        <Reply className="h-3 w-3" />
+                        Responder
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canText || !messageWamid(m)}
+                        title={
+                          messageWamid(m)
+                            ? "Reaccionar"
+                            : "Espera a que WhatsApp asigne wamid"
+                        }
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
+                        onClick={() => {
+                          setReactPickerId((id) => (id === m.id ? null : m.id));
+                          setMenuMessageId(null);
+                        }}
+                      >
+                        <SmilePlus className="h-3 w-3" />
+                        Reaccionar
+                      </button>
+                    </div>
+
+                    {showReact ? (
+                      <div className="mt-1 flex gap-1 rounded-full border border-[var(--line)] bg-[var(--surface)] p-1 shadow-sm">
+                        {REACTION_SET.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            className="h-8 w-8 rounded-full text-base hover:bg-[var(--accent-soft)]"
+                            onClick={() => {
+                              onReact(m, emoji);
+                              setReactPickerId(null);
+                            }}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
@@ -334,6 +488,26 @@ export function MessageThread({
           <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
             {windowHint}. WhatsApp solo permite mensajes libres dentro de las
             24h desde el último mensaje entrante del contacto.
+          </div>
+        ) : null}
+        {replyTo ? (
+          <div className="mb-2 flex items-start gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2">
+            <div className="min-w-0 flex-1 border-l-2 border-[var(--accent)] pl-2">
+              <p className="text-[11px] font-semibold text-[var(--accent)]">
+                Respondiendo
+              </p>
+              <p className="truncate text-xs text-[var(--muted)]">
+                {quotedPreview(replyTo)}
+              </p>
+            </div>
+            <button
+              type="button"
+              aria-label="Cancelar respuesta"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface)]"
+              onClick={() => onReplyTo(null)}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         ) : null}
         {recording ? (
@@ -395,9 +569,7 @@ export function MessageThread({
             size="icon"
             disabled={!canText || mediaSending || preparingMic}
             className={`h-9 w-9 shrink-0 rounded-full border-0 ${
-              recording
-                ? "bg-red-500/15 text-red-500"
-                : "text-[var(--muted)]"
+              recording ? "bg-red-500/15 text-red-500" : "text-[var(--muted)]"
             }`}
             aria-label={recording ? "Detener grabación" : "Nota de voz"}
             title={recording ? "Detener y enviar" : "Nota de voz (OGG)"}
@@ -447,7 +619,7 @@ export function MessageThread({
           </Button>
         </div>
         {canText && !recording ? (
-          <p className="mt-1.5 px-1 text-[10px] text-[var(--muted)]">
+          <p className="mt-1.5 text-[10px] text-[var(--muted)]">
             Enter envía · Shift+Enter salto · micrófono nota de voz · clip
             imagen/PDF
           </p>

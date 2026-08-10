@@ -27,6 +27,12 @@ export type ConversationRow = {
   }>;
 };
 
+export type MessageReaction = {
+  emoji: string;
+  from: string;
+  direction: "inbound" | "outbound";
+};
+
 export type MessageRow = {
   id: string;
   conversation_id?: string;
@@ -39,6 +45,10 @@ export type MessageRow = {
   media_url?: string | null;
   media_mime?: string | null;
   media_filename?: string | null;
+  ycloud_message_id?: string | null;
+  wamid?: string | null;
+  reply_to_wamid?: string | null;
+  reactions?: MessageReaction[] | null;
   /** Client-only blob URL for optimistic outbound media. */
   localPreviewUrl?: string | null;
 };
@@ -53,6 +63,9 @@ export type NoteRow = {
 export type AssigneeFilter = "all" | "mine" | "unassigned";
 
 export const MESSAGE_PAGE_SIZE = 25;
+
+export const MESSAGE_SELECT =
+  "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename, ycloud_message_id, wamid, reply_to_wamid, reactions";
 
 export const CONVERSATION_LIST_SELECT = `
   id, company_id, inbox_id, status, last_message_at, last_message_preview,

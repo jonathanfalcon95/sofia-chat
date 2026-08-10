@@ -56,6 +56,7 @@ import {
 import {
   CONVERSATION_LIST_SELECT,
   MESSAGE_PAGE_SIZE,
+  MESSAGE_SELECT,
   type AssigneeFilter,
   type ConversationRow,
   type MessageRow,
@@ -83,9 +84,6 @@ const ConversationSidePanel = dynamic(
     ),
   },
 );
-
-const MESSAGE_SELECT =
-  "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename";
 
 function enrichMessages(rows: MessageRow[]) {
   return rows.map((m) => {
@@ -154,6 +152,7 @@ export function InboxView({
     useState<AssigneeFilter>("all");
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
   const [mediaSending, setMediaSending] = useState(false);
+  const [replyTo, setReplyTo] = useState<MessageRow | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const desktopRedirectRef = useRef(false);
@@ -581,6 +580,7 @@ export function InboxView({
     }
     activeIdRef.current = id;
     setPendingRouteId(id);
+    setReplyTo(null);
     openStartByConversationRef.current.set(id, perfNowMs());
     reportClientConversationMetric("conversation_open_start", {
       conversationId: id,
@@ -603,6 +603,7 @@ export function InboxView({
 
   function backToList() {
     setPendingRouteId(null);
+    setReplyTo(null);
     setMessages([]);
     setNotes([]);
     setHasMoreMessages(false);
@@ -645,8 +646,15 @@ export function InboxView({
     const conversationId = active.id;
     const tempId = `temp-${crypto.randomUUID()}`;
     const createdAt = new Date().toISOString();
+    const replyToWamid =
+      replyTo?.wamid ||
+      (replyTo?.ycloud_message_id?.startsWith("wamid.")
+        ? replyTo.ycloud_message_id
+        : null) ||
+      null;
 
     setText("");
+    setReplyTo(null);
     focusComposer();
     requestAnimationFrame(() => resizeComposer());
 
@@ -659,6 +667,8 @@ export function InboxView({
       status: "pending",
       created_at: createdAt,
       template_name: null,
+      reply_to_wamid: replyToWamid,
+      reactions: [],
     };
 
     setMessages((prev) => [...prev, optimistic]);
@@ -683,6 +693,7 @@ export function InboxView({
             conversationId,
             mode: "text",
             text: payload,
+            replyToWamid: replyToWamid ?? undefined,
           }),
         });
         const data = await res.json();
@@ -728,6 +739,12 @@ export function InboxView({
     const body =
       caption ||
       (type === "audio" ? "Nota de voz" : type === "image" ? "Imagen" : file.name);
+    const replyToWamid =
+      replyTo?.wamid ||
+      (replyTo?.ycloud_message_id?.startsWith("wamid.")
+        ? replyTo.ycloud_message_id
+        : null) ||
+      null;
 
     const optimistic: MessageRow = {
       id: tempId,
@@ -741,8 +758,11 @@ export function InboxView({
       media_mime: mime,
       media_filename: file.name,
       localPreviewUrl,
+      reply_to_wamid: replyToWamid,
+      reactions: [],
     };
     setMessages((prev) => [...prev, optimistic]);
+    setReplyTo(null);
     setMediaSending(true);
 
     try {
@@ -750,6 +770,7 @@ export function InboxView({
       form.set("conversationId", conversationId);
       form.set("file", file);
       if (caption) form.set("caption", caption);
+      if (replyToWamid) form.set("replyToWamid", replyToWamid);
 
       const res = await fetch("/api/messages/send-media", {
         method: "POST",
@@ -803,6 +824,53 @@ export function InboxView({
       throw e;
     } finally {
       setMediaSending(false);
+    }
+  }
+
+  async function reactToMessage(message: MessageRow, emoji: string) {
+    if (!active) return;
+    const previous = message.reactions ?? [];
+    const withoutOurs = previous.filter((r) => r.direction !== "outbound");
+    const next =
+      emoji === ""
+        ? withoutOurs
+        : [
+            ...withoutOurs,
+            {
+              emoji,
+              from: "me",
+              direction: "outbound" as const,
+            },
+          ];
+    setMessages((prev) =>
+      prev.map((m) => (m.id === message.id ? { ...m, reactions: next } : m)),
+    );
+    try {
+      const res = await fetch("/api/messages/react", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: active.id,
+          messageId: message.id,
+          emoji,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo reaccionar");
+      if (data.message) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === message.id ? { ...(data.message as MessageRow) } : m,
+          ),
+        );
+      }
+    } catch (e) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === message.id ? { ...m, reactions: previous } : m,
+        ),
+      );
+      toast.error(e instanceof Error ? e.message : "No se pudo reaccionar");
     }
   }
 
@@ -1057,6 +1125,9 @@ export function InboxView({
                 composerRef={composerRef}
                 onInsertEmoji={insertEmoji}
                 onResizeComposer={resizeComposer}
+                replyTo={replyTo}
+                onReplyTo={setReplyTo}
+                onReact={(message, emoji) => void reactToMessage(message, emoji)}
                 onFirstPaint={(conversationId) => {
                   const startedAt =
                     openStartByConversationRef.current.get(conversationId);

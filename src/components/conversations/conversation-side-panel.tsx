@@ -1,12 +1,12 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Loader2, Ticket } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { Loader2, Ticket, Trash2 } from "lucide-react";
 import {
   addConversationNote,
   assignConversation,
+  deleteConversationNote,
   setConversationTag,
 } from "@/app/actions/conversations";
 import { setContactTags } from "@/app/actions/tags";
@@ -64,8 +64,124 @@ export function ConversationSidePanel({
   onOpenTicket: () => void;
 }) {
   const [pending, startTransition] = useTransition();
+  const [savingNote, setSavingNote] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [savingKanbanTag, setSavingKanbanTag] = useState(false);
 
   const companyAgents = agents.filter((a) => a.company_id === active.company_id);
+  const companyKanbanTags = tags.filter((t) => t.company_id === active.company_id);
+  const kanbanTagId =
+    active.conversation_tags?.find((ct) =>
+      companyKanbanTags.some((t) => t.id === ct.tag_id),
+    )?.tag_id ?? "";
+
+  async function saveNote() {
+    const body = note.trim();
+    if (!body || savingNote || deletingNoteId) return;
+
+    const tempId = `temp-note-${crypto.randomUUID()}`;
+    const optimistic: NoteRow = {
+      id: tempId,
+      body,
+      created_at: new Date().toISOString(),
+      profiles: { full_name: "Tú", email: "" },
+    };
+    const previous = notes;
+    onNotesChange([optimistic, ...notes]);
+    onNoteChange("");
+    setSavingNote(true);
+
+    try {
+      const created = await addConversationNote(
+        active.id,
+        active.company_id,
+        body,
+      );
+      const normalized = normalizeNotes([
+        created as unknown as Record<string, unknown>,
+      ])[0];
+      onNotesChange([
+        normalized ?? {
+          id: (created as { id: string }).id,
+          body,
+          created_at: (created as { created_at: string }).created_at,
+          profiles: null,
+        },
+        ...previous,
+      ]);
+      toast.success("Nota guardada");
+    } catch (err) {
+      onNotesChange(previous);
+      onNoteChange(body);
+      toast.error(err instanceof Error ? err.message : "Error");
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
+  async function removeNote(noteId: string) {
+    if (savingNote || deletingNoteId) return;
+    if (!window.confirm("¿Eliminar esta nota?")) return;
+
+    const previous = notes;
+    onNotesChange(notes.filter((n) => n.id !== noteId));
+    setDeletingNoteId(noteId);
+
+    try {
+      await deleteConversationNote(noteId, active.id);
+      toast.success("Nota eliminada");
+    } catch (err) {
+      onNotesChange(previous);
+      toast.error(err instanceof Error ? err.message : "Error");
+    } finally {
+      setDeletingNoteId(null);
+    }
+  }
+
+  function updateKanbanTag(nextTagId: string) {
+    if (!nextTagId || savingKanbanTag) return;
+    const previousTags = active.conversation_tags;
+    const tag = companyKanbanTags.find((t) => t.id === nextTagId);
+    onConversationsChange((prev) =>
+      prev.map((c) =>
+        c.id === active.id
+          ? {
+              ...c,
+              conversation_tags: tag
+                ? [
+                    {
+                      tag_id: tag.id,
+                      tags: {
+                        id: tag.id,
+                        name: tag.name,
+                        color: tag.color,
+                      },
+                    },
+                  ]
+                : [],
+            }
+          : c,
+      ),
+    );
+    setSavingKanbanTag(true);
+    void (async () => {
+      try {
+        await setConversationTag(active.id, nextTagId);
+        toast.success("Etiqueta actualizada");
+      } catch (err) {
+        onConversationsChange((prev) =>
+          prev.map((c) =>
+            c.id === active.id
+              ? { ...c, conversation_tags: previousTags }
+              : c,
+          ),
+        );
+        toast.error(err instanceof Error ? err.message : "Error");
+      } finally {
+        setSavingKanbanTag(false);
+      }
+    })();
+  }
 
   return (
     <div className="space-y-4">
@@ -104,52 +220,25 @@ export function ConversationSidePanel({
       </div>
 
       <div className="space-y-2">
-        <Label>Etiqueta / Kanban</Label>
+        <Label className="inline-flex items-center gap-2">
+          Etiqueta / Kanban
+          {savingKanbanTag ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--accent)]" />
+          ) : null}
+        </Label>
         <Select
-          value={active.conversation_tags?.[0]?.tag_id ?? ""}
-          onChange={(e) =>
-            startTransition(async () => {
-              try {
-                await setConversationTag(active.id, e.target.value);
-                const tag = tags.find((t) => t.id === e.target.value);
-                onConversationsChange((prev) =>
-                  prev.map((c) =>
-                    c.id === active.id
-                      ? {
-                          ...c,
-                          conversation_tags: tag
-                            ? [
-                                {
-                                  tag_id: tag.id,
-                                  tags: {
-                                    id: tag.id,
-                                    name: tag.name,
-                                    color: tag.color,
-                                  },
-                                },
-                              ]
-                            : c.conversation_tags,
-                        }
-                      : c,
-                  ),
-                );
-                toast.success("Etiqueta actualizada");
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : "Error");
-              }
-            })
-          }
+          value={kanbanTagId}
+          disabled={savingKanbanTag}
+          onChange={(e) => updateKanbanTag(e.target.value)}
         >
           <option value="" disabled>
             Seleccionar
           </option>
-          {tags
-            .filter((t) => t.company_id === active.company_id)
-            .map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
+          {companyKanbanTags.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
         </Select>
       </div>
 
@@ -270,53 +359,56 @@ export function ConversationSidePanel({
         <Textarea
           rows={3}
           value={note}
+          disabled={savingNote}
           onChange={(e) => onNoteChange(e.target.value)}
         />
         <Button
           variant="secondary"
           className="w-full min-h-11"
-          disabled={!note || pending}
-          onClick={() =>
-            startTransition(async () => {
-              try {
-                await addConversationNote(
-                  active.id,
-                  active.company_id,
-                  note,
-                );
-                onNoteChange("");
-                toast.success("Nota guardada");
-                const supabase = createClient();
-                const { data: noteRows } = await supabase
-                  .from("conversation_notes")
-                  .select("id, body, created_at, profiles(full_name, email)")
-                  .eq("conversation_id", active.id)
-                  .order("created_at", { ascending: false });
-                onNotesChange(
-                  normalizeNotes(
-                    noteRows as Array<Record<string, unknown>> | null,
-                  ),
-                );
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : "Error");
-              }
-            })
-          }
+          disabled={!note.trim() || savingNote || Boolean(deletingNoteId) || pending}
+          onClick={() => void saveNote()}
         >
-          Guardar nota
+          {savingNote ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Guardando…
+            </>
+          ) : (
+            "Guardar nota"
+          )}
         </Button>
       </div>
 
       <div className="space-y-2">
-        {notes.map((n) => (
-          <div
-            key={n.id}
-            className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs"
-          >
-            <strong>{n.profiles?.full_name || n.profiles?.email}</strong>
-            <p className="mt-1">{n.body}</p>
-          </div>
-        ))}
+        {notes.map((n) => {
+          const deleting = deletingNoteId === n.id;
+          return (
+            <div
+              key={n.id}
+              className={`rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs ${
+                deleting ? "opacity-60" : ""
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <strong>{n.profiles?.full_name || n.profiles?.email || "Nota"}</strong>
+                <button
+                  type="button"
+                  aria-label="Eliminar nota"
+                  disabled={savingNote || Boolean(deletingNoteId) || n.id.startsWith("temp-")}
+                  onClick={() => void removeNote(n.id)}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] transition hover:bg-red-500/10 hover:text-red-600 disabled:opacity-40"
+                >
+                  {deleting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+              <p className="mt-1">{n.body}</p>
+            </div>
+          );
+        })}
       </div>
 
       <div className="border-t border-[var(--line)] pt-4">

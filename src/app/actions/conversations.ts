@@ -98,12 +98,36 @@ export async function addConversationNote(conversationId: string, companyId: str
   } = await supabase.auth.getUser();
   if (!user) throw new Error("unauthorized");
 
-  const { error } = await supabase.from("conversation_notes").insert({
-    conversation_id: conversationId,
-    company_id: companyId,
-    author_id: user.id,
-    body,
-  });
+  const trimmed = body.trim();
+  if (!trimmed) throw new Error("La nota no puede estar vacía");
+
+  const { data, error } = await supabase
+    .from("conversation_notes")
+    .insert({
+      conversation_id: conversationId,
+      company_id: companyId,
+      author_id: user.id,
+      body: trimmed,
+    })
+    .select("id, body, created_at, profiles(full_name, email)")
+    .single();
+  if (error) throw new Error(error.message);
+  revalidatePath(`/conversations/${conversationId}`);
+  return data;
+}
+
+export async function deleteConversationNote(noteId: string, conversationId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("unauthorized");
+
+  const { error } = await supabase
+    .from("conversation_notes")
+    .delete()
+    .eq("id", noteId)
+    .eq("conversation_id", conversationId);
   if (error) throw new Error(error.message);
   revalidatePath(`/conversations/${conversationId}`);
 }
