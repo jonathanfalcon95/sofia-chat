@@ -52,7 +52,7 @@ export type NoteRow = {
 
 export type AssigneeFilter = "all" | "mine" | "unassigned";
 
-export const MESSAGE_PAGE_SIZE = 50;
+export const MESSAGE_PAGE_SIZE = 25;
 
 export const CONVERSATION_LIST_SELECT = `
   id, company_id, inbox_id, status, last_message_at, last_message_preview,

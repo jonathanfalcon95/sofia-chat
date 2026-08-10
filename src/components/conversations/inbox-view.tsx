@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -50,6 +50,10 @@ import {
 } from "@/components/ui/dialog";
 import { MessageThread } from "@/components/conversations/message-thread";
 import {
+  InboxThreadProvider,
+  type ThreadBootstrapPayload,
+} from "@/components/conversations/inbox-thread-context";
+import {
   CONVERSATION_LIST_SELECT,
   MESSAGE_PAGE_SIZE,
   type AssigneeFilter,
@@ -80,16 +84,23 @@ const ConversationSidePanel = dynamic(
   },
 );
 
+const MESSAGE_SELECT =
+  "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename";
+
+function enrichMessages(rows: MessageRow[]) {
+  return rows.map((m) => {
+    const cachedPreview = takeMediaPreview(m.id);
+    return cachedPreview ? { ...m, localPreviewUrl: cachedPreview } : m;
+  });
+}
+
 export function InboxView({
   initialConversations,
   agents,
   tags,
   contactTags = [],
-  selectedId,
   currentUserId,
-  initialMessages = [],
-  initialNotes = [],
-  initialHasMoreMessages = false,
+  children,
 }: {
   initialConversations: ConversationRow[];
   agents: Array<{
@@ -105,21 +116,22 @@ export function InboxView({
     color: string;
     company_id: string;
   }>;
-  selectedId?: string;
   currentUserId?: string;
-  initialMessages?: MessageRow[];
-  initialNotes?: NoteRow[];
-  initialHasMoreMessages?: boolean;
+  children?: React.ReactNode;
 }) {
   const router = useRouter();
+  const params = useParams<{ id?: string }>();
+  const routeId =
+    typeof params?.id === "string" && params.id.length > 0 ? params.id : null;
+
   const [conversations, setConversations] = useState(initialConversations);
   const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
   const [pendingRouteId, setPendingRouteId] = useState<string | null>(null);
-  const activeId = selectedId ?? null;
+  const activeId = pendingRouteId ?? routeId;
 
-  const [messages, setMessages] = useState<MessageRow[]>(initialMessages);
-  const [notes, setNotes] = useState<NoteRow[]>(initialNotes);
-  const [hasMoreMessages, setHasMoreMessages] = useState(initialHasMoreMessages);
+  const [messages, setMessages] = useState<MessageRow[]>([]);
+  const [notes, setNotes] = useState<NoteRow[]>([]);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [text, setText] = useState("");
@@ -139,39 +151,33 @@ export function InboxView({
   const [mediaSending, setMediaSending] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const appliedSelectedIdRef = useRef<string | null>(null);
   const desktopRedirectRef = useRef(false);
-  const prefetchedConversationIdsRef = useRef<Set<string>>(new Set());
+  const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const notesLoadingForIdRef = useRef<string | null>(null);
   const reloadDebounceRef = useRef<number | null>(null);
   const openStartByConversationRef = useRef<Map<string, number>>(new Map());
+  const activeIdRef = useRef<string | null>(activeId);
   const threadCacheRef = useRef<
     Map<string, { messages: MessageRow[]; notes: NoteRow[]; hasMore: boolean }>
   >(new Map());
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
     [conversations, activeId],
   );
-  const highlightedId =
-    pendingRouteId && pendingRouteId !== selectedId
-      ? pendingRouteId
-      : activeId;
+  const highlightedId = activeId;
 
   useEffect(() => {
-    const id = window.setTimeout(() => {
-      setConversations(initialConversations);
+    if (!(routeId && pendingRouteId === routeId)) return;
+    const timer = window.setTimeout(() => {
+      setPendingRouteId(null);
     }, 0);
-    return () => window.clearTimeout(id);
-  }, [initialConversations]);
-
-  useEffect(() => {
-    if (!selectedId) return;
-    const id = window.setTimeout(() => {
-      setPendingRouteId((prev) => (prev === selectedId ? null : prev));
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [selectedId]);
+    return () => window.clearTimeout(timer);
+  }, [routeId, pendingRouteId]);
 
   const filteredConversations = useMemo(() => {
     const query = phoneSearch.trim().toLowerCase();
@@ -244,15 +250,16 @@ export function InboxView({
     return () => mq.removeEventListener("change", sync);
   }, []);
 
-  // Desktop first login: land on a deep-linked chat (SSR messages) instead of
-  // client-fetching the first thread (that caused skeleton flicker).
+  // Desktop first login: land on a deep-linked chat instead of an empty pane.
   useEffect(() => {
-    if (selectedId || isDesktop !== true || desktopRedirectRef.current) return;
+    if (routeId || pendingRouteId || isDesktop !== true || desktopRedirectRef.current) {
+      return;
+    }
     const firstId = initialConversations[0]?.id;
     if (!firstId) return;
     desktopRedirectRef.current = true;
-    router.replace(`/conversations/${firstId}`);
-  }, [selectedId, isDesktop, initialConversations, router]);
+    router.replace(`/conversations/${firstId}`, { scroll: false });
+  }, [routeId, pendingRouteId, isDesktop, initialConversations, router]);
 
   const reloadConversations = useCallback(async () => {
     const supabase = createClient();
@@ -394,7 +401,7 @@ export function InboxView({
         notes: normalized,
         hasMore: cached?.hasMore ?? false,
       });
-      if (selectedId === conversationId) {
+      if (activeIdRef.current === conversationId) {
         setNotes(normalized);
         reportClientConversationMetric("thread_ready", {
           conversationId,
@@ -403,58 +410,110 @@ export function InboxView({
     } finally {
       notesLoadingForIdRef.current = null;
     }
-  }, [selectedId]);
+  }, []);
 
-  useEffect(() => {
-    if (!selectedId) {
-      appliedSelectedIdRef.current = null;
-      return;
+  const prefetchMessages = useCallback(async (conversationId: string) => {
+    if (!conversationId) return;
+    if (threadCacheRef.current.has(conversationId)) return;
+    if (prefetchInFlightRef.current.has(conversationId)) return;
+    prefetchInFlightRef.current.add(conversationId);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("messages")
+        .select(MESSAGE_SELECT)
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false })
+        .limit(MESSAGE_PAGE_SIZE);
+      const page = enrichMessages(
+        ((data as MessageRow[]) ?? []).slice().reverse(),
+      );
+      const existing = threadCacheRef.current.get(conversationId);
+      threadCacheRef.current.set(conversationId, {
+        messages: page,
+        notes: existing?.notes ?? [],
+        hasMore: (data?.length ?? 0) >= MESSAGE_PAGE_SIZE,
+      });
+      if (
+        activeIdRef.current === conversationId &&
+        !existing?.messages?.length
+      ) {
+        setMessages(page);
+        setHasMoreMessages((data?.length ?? 0) >= MESSAGE_PAGE_SIZE);
+        setLoadingThread(false);
+      }
+    } finally {
+      prefetchInFlightRef.current.delete(conversationId);
     }
-    if (appliedSelectedIdRef.current === selectedId) {
-      return;
-    }
-    const startedAt = openStartByConversationRef.current.get(selectedId);
-    const cached = threadCacheRef.current.get(selectedId);
-    const nextMessages = initialMessages.map((m) => {
-      const cachedPreview = takeMediaPreview(m.id);
-      return cachedPreview ? { ...m, localPreviewUrl: cachedPreview } : m;
-    });
-    const syncStateTimer = window.setTimeout(() => {
+  }, []);
+
+  const applyBootstrap = useCallback(
+    (payload: ThreadBootstrapPayload) => {
+      // Only hydrate the thread the user is currently viewing (pending soft-switch or URL).
+      if (payload.conversationId !== activeIdRef.current) {
+        return;
+      }
+      const startedAt = openStartByConversationRef.current.get(
+        payload.conversationId,
+      );
+      const nextMessages = enrichMessages(payload.messages);
+      const cached = threadCacheRef.current.get(payload.conversationId);
+      const nextNotes =
+        payload.notes && payload.notes.length > 0
+          ? payload.notes
+          : cached?.notes ?? [];
+
       setLoadingThread(false);
       setMessages(nextMessages);
-      setHasMoreMessages(initialHasMoreMessages);
-      if (initialNotes.length > 0) {
-        setNotes(initialNotes);
+      setHasMoreMessages(payload.hasMore);
+      setNotes(nextNotes);
+      threadCacheRef.current.set(payload.conversationId, {
+        messages: nextMessages,
+        notes: nextNotes,
+        hasMore: payload.hasMore,
+      });
+      markConversationRead(payload.conversationId);
+      setPendingRouteId((prev) =>
+        prev === payload.conversationId ? null : prev,
+      );
+      reportClientConversationMetric("thread_ready_payload", {
+        conversationId: payload.conversationId,
+        durationMs: startedAt ? durationSince(startedAt) : null,
+        messageCount: nextMessages.length,
+        hasCachedNotes: Boolean(nextNotes.length),
+      });
+      if (payload.notes && payload.notes.length > 0) {
         reportClientConversationMetric("thread_ready", {
-          conversationId: selectedId,
+          conversationId: payload.conversationId,
         });
       } else {
-        setNotes(cached?.notes ?? []);
-        void loadNotesInBackground(selectedId);
+        void loadNotesInBackground(payload.conversationId);
+      }
+    },
+    [loadNotesInBackground, markConversationRead],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!activeId) {
+        setMessages([]);
+        setNotes([]);
+        setHasMoreMessages(false);
+        setLoadingThread(false);
+        return;
+      }
+      const cached = threadCacheRef.current.get(activeId);
+      if (cached?.messages?.length) {
+        setMessages(cached.messages);
+        setNotes(cached.notes);
+        setHasMoreMessages(cached.hasMore);
+        setLoadingThread(false);
+      } else {
+        setLoadingThread(true);
       }
     }, 0);
-    threadCacheRef.current.set(selectedId, {
-      messages: nextMessages,
-      notes: initialNotes.length > 0 ? initialNotes : cached?.notes ?? [],
-      hasMore: initialHasMoreMessages,
-    });
-    markConversationRead(selectedId);
-    appliedSelectedIdRef.current = selectedId;
-    reportClientConversationMetric("thread_ready_payload", {
-      conversationId: selectedId,
-      durationMs: startedAt ? durationSince(startedAt) : null,
-      messageCount: nextMessages.length,
-      hasCachedNotes: Boolean(cached?.notes?.length),
-    });
-    return () => window.clearTimeout(syncStateTimer);
-  }, [
-    initialHasMoreMessages,
-    initialMessages,
-    initialNotes,
-    loadNotesInBackground,
-    markConversationRead,
-    selectedId,
-  ]);
+    return () => window.clearTimeout(timer);
+  }, [activeId]);
 
   useEffect(() => {
     if (!activeId) return;
@@ -502,26 +561,30 @@ export function InboxView({
     });
   }
 
-  const prefetchConversationRoute = useCallback(
-    (id: string) => {
-      if (prefetchedConversationIdsRef.current.has(id)) return;
-      prefetchedConversationIdsRef.current.add(id);
-      router.prefetch(`/conversations/${id}`);
-    },
-    [router],
-  );
-
   function openConversation(id: string) {
-    if (id === selectedId) {
+    if (id === activeId && id === routeId) {
       setPendingRouteId(null);
       return;
     }
+    activeIdRef.current = id;
     setPendingRouteId(id);
     openStartByConversationRef.current.set(id, perfNowMs());
     reportClientConversationMetric("conversation_open_start", {
       conversationId: id,
     });
-    prefetchConversationRoute(id);
+
+    const cached = threadCacheRef.current.get(id);
+    if (cached?.messages?.length) {
+      setMessages(cached.messages);
+      setNotes(cached.notes);
+      setHasMoreMessages(cached.hasMore);
+      setLoadingThread(false);
+    } else {
+      setLoadingThread(true);
+      void prefetchMessages(id);
+    }
+
+    markConversationRead(id);
     router.push(`/conversations/${id}`, { scroll: false });
   }
 
@@ -531,10 +594,8 @@ export function InboxView({
     setNotes([]);
     setHasMoreMessages(false);
     setDetailOpen(false);
-    if (
-      selectedId ||
-      window.matchMedia("(max-width: 900px)").matches
-    ) {
+    setLoadingThread(false);
+    if (routeId || window.matchMedia("(max-width: 900px)").matches) {
       router.push("/conversations", { scroll: false });
     }
   }
@@ -549,9 +610,7 @@ export function InboxView({
     const supabase = createClient();
     const { data } = await supabase
       .from("messages")
-      .select(
-        "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename",
-      )
+      .select(MESSAGE_SELECT)
       .eq("conversation_id", activeId)
       .lt("created_at", oldest.created_at)
       .order("created_at", { ascending: false })
@@ -746,7 +805,9 @@ export function InboxView({
   const mobileView = activeId ? "thread" : "list";
 
   return (
-    <div>
+    <InboxThreadProvider applyBootstrap={applyBootstrap}>
+      {children}
+      <div>
       <div className={`chat-layout chat-mobile-${mobileView}`}>
         <section className="chat-pane chat-pane-list">
           <div className="space-y-2 border-b border-[var(--line)] p-3">
@@ -857,8 +918,8 @@ export function InboxView({
                     key={c.id}
                     type="button"
                     onClick={() => openConversation(c.id)}
-                    onMouseEnter={() => prefetchConversationRoute(c.id)}
-                    onFocus={() => prefetchConversationRoute(c.id)}
+                    onMouseEnter={() => void prefetchMessages(c.id)}
+                    onFocus={() => void prefetchMessages(c.id)}
                     className={`chat-row w-full border-b border-[var(--line)] px-4 py-3 text-left transition ${
                       activeRow
                         ? "bg-[var(--accent-soft)]"
@@ -1170,5 +1231,6 @@ export function InboxView({
         </DialogContent>
       </Dialog>
     </div>
+    </InboxThreadProvider>
   );
 }

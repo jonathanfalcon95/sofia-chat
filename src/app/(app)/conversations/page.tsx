@@ -1,17 +1,4 @@
-import { getAppSession } from "@/lib/rbac/session";
-import { loadInboxListData } from "@/lib/conversations/load-inbox-data";
-import { InboxView } from "@/components/conversations/inbox-view";
-
-export default async function ConversationsPage() {
-  const [session, data] = await Promise.all([getAppSession(), loadInboxListData()]);
-
-  return (
-    <InboxView
-      initialConversations={data.conversations}
-      agents={data.agents}
-      tags={data.tags}
-      contactTags={data.contactTags}
-      currentUserId={session?.userId}
-    />
-  );
+export default function ConversationsPage() {
+  // List shell lives in layout; this route only means "no thread selected".
+  return null;
 }
