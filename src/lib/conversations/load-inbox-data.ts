@@ -68,6 +68,7 @@ export async function loadConversationDetailData(
     .from("messages")
     .select(MESSAGE_SELECT)
     .eq("conversation_id", conversationId)
+    .neq("type", "reaction")
     .order("created_at", { ascending: false })
     .limit(MESSAGE_PAGE_SIZE);
 

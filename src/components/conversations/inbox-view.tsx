@@ -291,6 +291,8 @@ export function InboxView({
   }, [reloadConversations]);
 
   const onMessage = useCallback((msg: MessageRow) => {
+    // Reactions update metadata on the target message; never render as bubbles.
+    if (msg.type === "reaction") return;
     setMessages((prev) => {
       const cached = takeMediaPreview(msg.id);
       const enriched: MessageRow = cached
@@ -427,6 +429,7 @@ export function InboxView({
         .from("messages")
         .select(MESSAGE_SELECT)
         .eq("conversation_id", conversationId)
+        .neq("type", "reaction")
         .order("created_at", { ascending: false })
         .limit(MESSAGE_PAGE_SIZE);
       const page = enrichMessages(
@@ -626,6 +629,7 @@ export function InboxView({
       .from("messages")
       .select(MESSAGE_SELECT)
       .eq("conversation_id", activeId)
+      .neq("type", "reaction")
       .lt("created_at", oldest.created_at)
       .order("created_at", { ascending: false })
       .limit(MESSAGE_PAGE_SIZE);
@@ -638,25 +642,29 @@ export function InboxView({
     setLoadingOlder(false);
   }
 
-  function sendTextOptimistic() {
+  function sendTextOptimistic(overrideText?: string) {
     if (!active) return;
-    const payload = text.trim();
+    const fromCommand = typeof overrideText === "string";
+    const payload = (fromCommand ? overrideText : text).trim();
     if (!payload || !isWithinCustomerWindow(active.window_expires_at)) return;
 
     const conversationId = active.id;
     const tempId = `temp-${crypto.randomUUID()}`;
     const createdAt = new Date().toISOString();
-    const replyToWamid =
-      replyTo?.wamid ||
-      (replyTo?.ycloud_message_id?.startsWith("wamid.")
-        ? replyTo.ycloud_message_id
-        : null) ||
-      null;
+    const replyToWamid = fromCommand
+      ? null
+      : replyTo?.wamid ||
+        (replyTo?.ycloud_message_id?.startsWith("wamid.")
+          ? replyTo.ycloud_message_id
+          : null) ||
+        null;
 
-    setText("");
-    setReplyTo(null);
-    focusComposer();
-    requestAnimationFrame(() => resizeComposer());
+    if (!fromCommand) {
+      setText("");
+      setReplyTo(null);
+      focusComposer();
+      requestAnimationFrame(() => resizeComposer());
+    }
 
     const optimistic: MessageRow = {
       id: tempId,
@@ -1119,6 +1127,7 @@ export function InboxView({
                 text={text}
                 onTextChange={setText}
                 onSend={() => sendTextOptimistic()}
+                onSendCommand={(cmd) => sendTextOptimistic(cmd)}
                 onSendMedia={sendMediaFile}
                 mediaSending={mediaSending}
                 onComposerKeyDown={handleComposerKeyDown}

@@ -29,6 +29,14 @@ const EmojiPicker = dynamic(
   { ssr: false, loading: () => <span className="h-9 w-9" /> },
 );
 
+const SofiaCommandsHelp = dynamic(
+  () =>
+    import("@/components/conversations/sofia-commands-help").then(
+      (m) => m.SofiaCommandsHelp,
+    ),
+  { ssr: false, loading: () => <span className="h-9 w-9" /> },
+);
+
 const REACTION_SET = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 
 function isMedia(type: string) {
@@ -53,6 +61,7 @@ export function MessageThread({
   text,
   onTextChange,
   onSend,
+  onSendCommand,
   onSendMedia,
   mediaSending,
   onComposerKeyDown,
@@ -75,6 +84,7 @@ export function MessageThread({
   text: string;
   onTextChange: (value: string) => void;
   onSend: () => void;
+  onSendCommand: (command: string) => void;
   onSendMedia: (file: File, caption?: string) => Promise<void>;
   mediaSending: boolean;
   onComposerKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -540,6 +550,10 @@ export function MessageThread({
             disabled={!canText || mediaSending || recording}
             onPick={onInsertEmoji}
           />
+          <SofiaCommandsHelp
+            disabled={!canText || mediaSending || recording}
+            onSelect={onSendCommand}
+          />
           <input
             ref={fileInputRef}
             type="file"
@@ -620,8 +634,8 @@ export function MessageThread({
         </div>
         {canText && !recording ? (
           <p className="mt-1.5 text-[10px] text-[var(--muted)]">
-            Enter envía · Shift+Enter salto · micrófono nota de voz · clip
-            imagen/PDF
+            Enter envía · Shift+Enter salto · ? comandos Sofia · micrófono nota
+            de voz · clip imagen/PDF
           </p>
         ) : null}
       </footer>

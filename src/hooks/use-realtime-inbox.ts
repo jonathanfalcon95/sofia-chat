@@ -88,6 +88,8 @@ export function useRealtimeInbox({
         (payload) => {
           const msg = payload.new as MessageRow;
           if (!msg?.conversation_id) return;
+          // Reactions are metadata on another message — never preview/notify.
+          if (msg.type === "reaction") return;
           // Active thread inserts are handled by the dedicated thread channel.
           if (msg.conversation_id === activeIdRef.current) {
             onConversationChangeRef.current({
@@ -137,7 +139,10 @@ export function useRealtimeInbox({
           filter: `conversation_id=eq.${activeConversationId}`,
         },
         (payload) => {
-          if (payload.eventType === "INSERT" && payload.new) {
+          if (
+            (payload.eventType === "INSERT" || payload.eventType === "UPDATE") &&
+            payload.new
+          ) {
             onMessageRef.current(payload.new as MessageRow);
           }
         },
