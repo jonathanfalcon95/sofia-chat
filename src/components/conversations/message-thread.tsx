@@ -10,6 +10,7 @@ import {
   Send,
   SmilePlus,
   Square,
+  AlertTriangle,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -72,6 +73,7 @@ export function MessageThread({
   replyTo,
   onReplyTo,
   onReact,
+  sofiaStoppedAll = false,
 }: {
   activeConversationId: string;
   messages: MessageRow[];
@@ -95,6 +97,7 @@ export function MessageThread({
   replyTo: MessageRow | null;
   onReplyTo: (message: MessageRow | null) => void;
   onReact: (message: MessageRow, emoji: string) => void;
+  sofiaStoppedAll?: boolean;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -506,6 +509,19 @@ export function MessageThread({
       </div>
 
       <footer className="chat-composer-footer shrink-0 border-t border-[var(--line)] bg-[var(--surface)] px-3 py-3 sm:px-4">
+        {sofiaStoppedAll ? (
+          <div className="mb-2 flex gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <p className="font-semibold">Sofia está pausada globalmente</p>
+              <p className="mt-0.5 opacity-90">
+                No responderá en ningún chat. Usa{" "}
+                <code className="font-mono font-semibold">/startsofia_all</code>{" "}
+                (botón de ayuda) para reactivarla.
+              </p>
+            </div>
+          </div>
+        ) : null}
         {!canText ? (
           <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
             {windowHint}. WhatsApp solo permite mensajes libres dentro de las
@@ -565,6 +581,7 @@ export function MessageThread({
           <SofiaCommandsHelp
             disabled={!canText || mediaSending || recording}
             onSelect={onSendCommand}
+            sofiaStoppedAll={sofiaStoppedAll}
           />
           <input
             ref={fileInputRef}

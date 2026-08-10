@@ -71,6 +71,11 @@ import {
   nowMs as perfNowMs,
   reportClientConversationMetric,
 } from "@/lib/conversations/perf";
+import {
+  readSofiaStoppedAll,
+  syncSofiaStoppedAllFromCommand,
+  writeSofiaStoppedAll,
+} from "@/lib/conversations/sofia-status";
 
 const ConversationSidePanel = dynamic(
   () =>
@@ -153,6 +158,7 @@ export function InboxView({
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
   const [mediaSending, setMediaSending] = useState(false);
   const [replyTo, setReplyTo] = useState<MessageRow | null>(null);
+  const [sofiaStoppedAll, setSofiaStoppedAll] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const desktopRedirectRef = useRef(false);
@@ -168,6 +174,28 @@ export function InboxView({
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+
+  useEffect(() => {
+    setSofiaStoppedAll(readSofiaStoppedAll());
+  }, []);
+
+  useEffect(() => {
+    let found: boolean | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const body = messages[i]?.body?.trim();
+      if (body === "/stopsofia_all") {
+        found = true;
+        break;
+      }
+      if (body === "/startsofia_all") {
+        found = false;
+        break;
+      }
+    }
+    if (found === null) return;
+    writeSofiaStoppedAll(found);
+    setSofiaStoppedAll(found);
+  }, [messages]);
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
@@ -647,6 +675,9 @@ export function InboxView({
     const fromCommand = typeof overrideText === "string";
     const payload = (fromCommand ? overrideText : text).trim();
     if (!payload || !isWithinCustomerWindow(active.window_expires_at)) return;
+
+    const synced = syncSofiaStoppedAllFromCommand(payload);
+    if (synced !== null) setSofiaStoppedAll(synced);
 
     const conversationId = active.id;
     const tempId = `temp-${crypto.randomUUID()}`;
@@ -1150,6 +1181,7 @@ export function InboxView({
                 onResizeComposer={resizeComposer}
                 replyTo={replyTo}
                 onReplyTo={setReplyTo}
+                sofiaStoppedAll={sofiaStoppedAll}
                 onReact={(message, emoji) => void reactToMessage(message, emoji)}
                 onFirstPaint={(conversationId) => {
                   const startedAt =
