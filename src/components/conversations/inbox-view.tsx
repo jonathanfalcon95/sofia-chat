@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { isWithinCustomerWindow } from "@/lib/utils";
+import { cn, isWithinCustomerWindow } from "@/lib/utils";
 import {
   rememberMediaPreview,
   takeMediaPreview,
@@ -1047,6 +1047,7 @@ export function InboxView({
                 const contact = c.contacts;
                 const tag = c.conversation_tags?.[0]?.tags;
                 const activeRow = c.id === highlightedId;
+                const unread = c.unread_count > 0;
                 return (
                   <button
                     key={c.id}
@@ -1054,17 +1055,30 @@ export function InboxView({
                     onClick={() => openConversation(c.id)}
                     onMouseEnter={() => void prefetchMessages(c.id)}
                     onFocus={() => void prefetchMessages(c.id)}
-                    className={`chat-row w-full border-b border-[var(--line)] px-4 py-3 text-left transition ${
+                    className={cn(
+                      "chat-row w-full border-b border-[var(--line)] px-4 py-3 text-left transition",
                       activeRow
                         ? "bg-[var(--accent-soft)]"
-                        : "hover:bg-[var(--surface-2)]"
-                    }`}
+                        : "hover:bg-[var(--surface-2)]",
+                    )}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <strong className="text-sm">
+                      <span
+                        className={cn(
+                          "truncate text-sm text-[var(--ink)]",
+                          unread ? "font-bold" : "font-medium",
+                        )}
+                      >
                         {contact?.name || contact?.phone_number}
-                      </strong>
-                      <span className="text-[11px] text-[var(--muted)]">
+                      </span>
+                      <span
+                        className={cn(
+                          "shrink-0 text-[11px]",
+                          unread
+                            ? "font-semibold text-[var(--accent)]"
+                            : "text-[var(--muted)]",
+                        )}
+                      >
                         {c.last_message_at
                           ? formatDistanceToNow(new Date(c.last_message_at), {
                               addSuffix: true,
@@ -1073,9 +1087,23 @@ export function InboxView({
                           : ""}
                       </span>
                     </div>
-                    <p className="mt-1 line-clamp-1 text-xs text-[var(--muted)]">
-                      {c.last_message_preview || "Sin mensajes"}
-                    </p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <p
+                        className={cn(
+                          "min-w-0 flex-1 line-clamp-1 text-xs",
+                          unread
+                            ? "font-semibold text-[var(--ink)]"
+                            : "text-[var(--muted)]",
+                        )}
+                      >
+                        {c.last_message_preview || "Sin mensajes"}
+                      </p>
+                      {unread ? (
+                        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] px-1.5 text-[10px] font-bold leading-none text-white">
+                          {c.unread_count > 99 ? "99+" : c.unread_count}
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <Badge className="normal-case">{c.inboxes?.name}</Badge>
                       {tag ? (
@@ -1103,11 +1131,6 @@ export function InboxView({
                           </Badge>
                         ) : null,
                       )}
-                      {c.unread_count > 0 ? (
-                        <Badge className="bg-[var(--accent)] text-white">
-                          {c.unread_count}
-                        </Badge>
-                      ) : null}
                     </div>
                   </button>
                 );
