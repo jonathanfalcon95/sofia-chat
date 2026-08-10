@@ -271,6 +271,12 @@ export function MessageThread({
   ).padStart(2, "0")}`;
 
   function quotedPreview(m: MessageRow) {
+    if (m.type === "image") return m.body?.trim() ? `📷 ${m.body}` : "📷 Imagen";
+    if (m.type === "video") return m.body?.trim() ? `🎬 ${m.body}` : "🎬 Video";
+    if (m.type === "audio") return "🎤 Nota de voz";
+    if (m.type === "document")
+      return `📄 ${m.media_filename || m.body || "Documento"}`;
+    if (m.type === "sticker") return "Sticker";
     return (m.body || m.template_name || m.type || "Mensaje").slice(0, 120);
   }
 
@@ -437,9 +443,15 @@ export function MessageThread({
                     >
                       <button
                         type="button"
-                        disabled={!canText}
+                        disabled={!canText || !messageWamid(m)}
+                        title={
+                          messageWamid(m)
+                            ? "Responder"
+                            : "Espera a que WhatsApp asigne wamid"
+                        }
                         className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
                         onClick={() => {
+                          if (!messageWamid(m)) return;
                           onReplyTo(m);
                           setMenuMessageId(null);
                           composerRef.current?.focus();

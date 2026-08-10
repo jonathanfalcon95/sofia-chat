@@ -659,6 +659,13 @@ export function InboxView({
           : null) ||
         null;
 
+    if (!fromCommand && replyTo && !replyToWamid) {
+      toast.error(
+        "Este mensaje aún no tiene wamid de WhatsApp. Espera un momento e inténtalo de nuevo.",
+      );
+      return;
+    }
+
     if (!fromCommand) {
       setText("");
       setReplyTo(null);
@@ -753,6 +760,13 @@ export function InboxView({
         ? replyTo.ycloud_message_id
         : null) ||
       null;
+
+    if (replyTo && !replyToWamid) {
+      URL.revokeObjectURL(localPreviewUrl);
+      throw new Error(
+        "Este mensaje aún no tiene wamid de WhatsApp. Espera un momento e inténtalo de nuevo.",
+      );
+    }
 
     const optimistic: MessageRow = {
       id: tempId,
