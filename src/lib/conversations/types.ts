@@ -20,7 +20,7 @@ export type ConversationRow = {
     phone_number: string;
     contact_tags?: ContactTagRef[];
   } | null;
-  inboxes: { name: string; phone_number: string } | null;
+  inboxes: { name: string; phone_number?: string | null } | null;
   conversation_tags: Array<{
     tag_id: string;
     tags: { id: string; name: string; color: string } | null;
@@ -59,8 +59,8 @@ export const CONVERSATION_LIST_SELECT = `
   window_expires_at, assignee_id, unread_count, contact_id,
   contacts (
     id, name, phone_number,
-    contact_tags ( tag_id, tags ( id, name, color, is_kanban_column ) )
+    contact_tags ( tag_id, tags ( id, name, color ) )
   ),
-  inboxes ( name, phone_number ),
+  inboxes ( name ),
   conversation_tags ( tag_id, tags ( id, name, color ) )
 `;

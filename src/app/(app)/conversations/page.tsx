@@ -1,10 +1,9 @@
 import { getAppSession } from "@/lib/rbac/session";
-import { loadInboxBootstrap } from "@/lib/conversations/load-inbox-data";
+import { loadInboxListData } from "@/lib/conversations/load-inbox-data";
 import { InboxView } from "@/components/conversations/inbox-view";
 
 export default async function ConversationsPage() {
-  const session = await getAppSession();
-  const data = await loadInboxBootstrap();
+  const [session, data] = await Promise.all([getAppSession(), loadInboxListData()]);
 
   return (
     <InboxView
@@ -12,7 +11,6 @@ export default async function ConversationsPage() {
       agents={data.agents}
       tags={data.tags}
       contactTags={data.contactTags}
-      inboxes={data.inboxes}
       currentUserId={session?.userId}
     />
   );

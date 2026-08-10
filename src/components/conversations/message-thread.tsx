@@ -21,6 +21,7 @@ const EmojiPicker = dynamic(
 );
 
 export function MessageThread({
+  activeConversationId,
   messages,
   loadingThread,
   loadingOlder,
@@ -37,7 +38,9 @@ export function MessageThread({
   composerRef,
   onInsertEmoji,
   onResizeComposer,
+  onFirstPaint,
 }: {
+  activeConversationId: string;
   messages: MessageRow[];
   loadingThread: boolean;
   loadingOlder: boolean;
@@ -54,6 +57,7 @@ export function MessageThread({
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   onInsertEmoji: (emoji: string) => void;
   onResizeComposer: () => void;
+  onFirstPaint?: (conversationId: string) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -66,9 +70,12 @@ export function MessageThread({
   const chunksRef = useRef<Blob[]>([]);
   const mimeRef = useRef("audio/ogg");
   const tickRef = useRef<number | null>(null);
+  const firstPaintDoneForConversationRef = useRef<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
   const [preparingMic, setPreparingMic] = useState(false);
+  const firstMessageId = messages[0]?.id;
+  const lastMessageId = messages[messages.length - 1]?.id;
 
   function scrollToBottom() {
     const el = parentRef.current;
@@ -82,8 +89,7 @@ export function MessageThread({
     if (loadingThread) return;
     if (messages.length === 0) return;
 
-    const firstId = messages[0]?.id ?? null;
-    const lastId = messages[messages.length - 1]?.id ?? null;
+    const firstId = firstMessageId ?? null;
     const grew = messages.length > prevCountRef.current;
     const prepended =
       grew &&
@@ -101,7 +107,16 @@ export function MessageThread({
     // Single rAF is enough; repeated timeouts caused visible flicker with media.
     const t0 = requestAnimationFrame(() => scrollToBottom());
     return () => cancelAnimationFrame(t0);
-  }, [loadingThread, messages.length, messages[messages.length - 1]?.id]);
+  }, [firstMessageId, lastMessageId, loadingThread, messages.length]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    if (loadingThread) return;
+    if (firstPaintDoneForConversationRef.current === activeConversationId) return;
+    firstPaintDoneForConversationRef.current = activeConversationId;
+    const frame = requestAnimationFrame(() => onFirstPaint?.(activeConversationId));
+    return () => cancelAnimationFrame(frame);
+  }, [activeConversationId, loadingThread, onFirstPaint]);
 
   useEffect(() => {
     return () => {

@@ -61,6 +61,11 @@ import {
   normalizeConversations,
   normalizeNotes,
 } from "@/lib/conversations/normalize";
+import {
+  durationSince,
+  nowMs as perfNowMs,
+  reportClientConversationMetric,
+} from "@/lib/conversations/perf";
 
 const ConversationSidePanel = dynamic(
   () =>
@@ -80,7 +85,6 @@ export function InboxView({
   agents,
   tags,
   contactTags = [],
-  inboxes: _inboxes,
   selectedId,
   currentUserId,
   initialMessages = [],
@@ -101,50 +105,21 @@ export function InboxView({
     color: string;
     company_id: string;
   }>;
-  inboxes: Array<{
-    id: string;
-    name: string;
-    phone_number: string;
-    company_id: string;
-  }>;
   selectedId?: string;
   currentUserId?: string;
   initialMessages?: MessageRow[];
   initialNotes?: NoteRow[];
   initialHasMoreMessages?: boolean;
 }) {
-  void _inboxes;
   const router = useRouter();
   const [conversations, setConversations] = useState(initialConversations);
-  const [conversationsProp, setConversationsProp] = useState(
-    initialConversations,
-  );
-  if (initialConversations !== conversationsProp) {
-    setConversationsProp(initialConversations);
-    setConversations(initialConversations);
-  }
-
   const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
-  const [pickedId, setPickedId] = useState<string | null>(selectedId ?? null);
-  const [urlSelected, setUrlSelected] = useState(selectedId);
-  if (selectedId !== urlSelected) {
-    setUrlSelected(selectedId);
-    setPickedId(selectedId ?? null);
-  }
+  const [pendingRouteId, setPendingRouteId] = useState<string | null>(null);
+  const activeId = selectedId ?? null;
 
-  // Never auto-pick a chat before the user (or desktop redirect) chooses one.
-  // This avoids first-login skeleton flicker from client-fetching thread #1.
-  const activeId = selectedId ?? pickedId ?? null;
-
-  const [messages, setMessages] = useState<MessageRow[]>(
-    selectedId ? initialMessages : [],
-  );
-  const [notes, setNotes] = useState<NoteRow[]>(
-    selectedId ? initialNotes : [],
-  );
-  const [hasMoreMessages, setHasMoreMessages] = useState(
-    selectedId ? initialHasMoreMessages : false,
-  );
+  const [messages, setMessages] = useState<MessageRow[]>(initialMessages);
+  const [notes, setNotes] = useState<NoteRow[]>(initialNotes);
+  const [hasMoreMessages, setHasMoreMessages] = useState(initialHasMoreMessages);
   const [loadingThread, setLoadingThread] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [text, setText] = useState("");
@@ -164,14 +139,39 @@ export function InboxView({
   const [mediaSending, setMediaSending] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const loadedThreadIdRef = useRef<string | null>(null);
   const appliedSelectedIdRef = useRef<string | null>(null);
   const desktopRedirectRef = useRef(false);
+  const prefetchedConversationIdsRef = useRef<Set<string>>(new Set());
+  const notesLoadingForIdRef = useRef<string | null>(null);
+  const reloadDebounceRef = useRef<number | null>(null);
+  const openStartByConversationRef = useRef<Map<string, number>>(new Map());
+  const threadCacheRef = useRef<
+    Map<string, { messages: MessageRow[]; notes: NoteRow[]; hasMore: boolean }>
+  >(new Map());
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
     [conversations, activeId],
   );
+  const highlightedId =
+    pendingRouteId && pendingRouteId !== selectedId
+      ? pendingRouteId
+      : activeId;
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setConversations(initialConversations);
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [initialConversations]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const id = window.setTimeout(() => {
+      setPendingRouteId((prev) => (prev === selectedId ? null : prev));
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [selectedId]);
 
   const filteredConversations = useMemo(() => {
     const query = phoneSearch.trim().toLowerCase();
@@ -256,6 +256,7 @@ export function InboxView({
 
   const reloadConversations = useCallback(async () => {
     const supabase = createClient();
+    const startedAt = perfNowMs();
     const { data } = await supabase
       .from("conversations")
       .select(CONVERSATION_LIST_SELECT)
@@ -264,7 +265,19 @@ export function InboxView({
     setConversations(
       normalizeConversations(data as Array<Record<string, unknown>> | null),
     );
+    reportClientConversationMetric("conversation_list_reload", {
+      durationMs: durationSince(startedAt),
+      rows: data?.length ?? 0,
+    });
   }, []);
+
+  const queueReloadConversations = useCallback(() => {
+    if (reloadDebounceRef.current) return;
+    reloadDebounceRef.current = window.setTimeout(() => {
+      reloadDebounceRef.current = null;
+      void reloadConversations();
+    }, 300);
+  }, [reloadConversations]);
 
   const onMessage = useCallback((msg: MessageRow) => {
     setMessages((prev) => {
@@ -310,7 +323,7 @@ export function InboxView({
       setConversations((prev) => {
         const exists = prev.some((c) => c.id === patch.id);
         if (!exists) {
-          void reloadConversations();
+          queueReloadConversations();
           return prev;
         }
         return prev
@@ -339,96 +352,130 @@ export function InboxView({
           });
       });
     },
-    [activeId, reloadConversations],
+    [activeId, queueReloadConversations],
   );
 
   useRealtimeInbox({
     activeConversationId: activeId ?? undefined,
     onMessage,
     onConversationChange,
-    onReloadConversations: reloadConversations,
+    onReloadConversations: queueReloadConversations,
   });
+
+  const markConversationRead = useCallback((conversationId: string) => {
+    void createClient()
+      .from("conversations")
+      .update({ unread_count: 0 })
+      .eq("id", conversationId);
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === conversationId ? { ...c, unread_count: 0 } : c,
+      ),
+    );
+  }, []);
+
+  const loadNotesInBackground = useCallback(async (conversationId: string) => {
+    if (!conversationId) return;
+    if (notesLoadingForIdRef.current === conversationId) return;
+    notesLoadingForIdRef.current = conversationId;
+    try {
+      const supabase = createClient();
+      const { data: noteRows } = await supabase
+        .from("conversation_notes")
+        .select("id, body, created_at, profiles(full_name, email)")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false });
+      const normalized = normalizeNotes(
+        noteRows as Array<Record<string, unknown>> | null,
+      );
+      const cached = threadCacheRef.current.get(conversationId);
+      threadCacheRef.current.set(conversationId, {
+        messages: cached?.messages ?? [],
+        notes: normalized,
+        hasMore: cached?.hasMore ?? false,
+      });
+      if (selectedId === conversationId) {
+        setNotes(normalized);
+        reportClientConversationMetric("thread_ready", {
+          conversationId,
+        });
+      }
+    } finally {
+      notesLoadingForIdRef.current = null;
+    }
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      appliedSelectedIdRef.current = null;
+      return;
+    }
+    if (appliedSelectedIdRef.current === selectedId) {
+      return;
+    }
+    const startedAt = openStartByConversationRef.current.get(selectedId);
+    const cached = threadCacheRef.current.get(selectedId);
+    const nextMessages = initialMessages.map((m) => {
+      const cachedPreview = takeMediaPreview(m.id);
+      return cachedPreview ? { ...m, localPreviewUrl: cachedPreview } : m;
+    });
+    const syncStateTimer = window.setTimeout(() => {
+      setLoadingThread(false);
+      setMessages(nextMessages);
+      setHasMoreMessages(initialHasMoreMessages);
+      if (initialNotes.length > 0) {
+        setNotes(initialNotes);
+        reportClientConversationMetric("thread_ready", {
+          conversationId: selectedId,
+        });
+      } else {
+        setNotes(cached?.notes ?? []);
+        void loadNotesInBackground(selectedId);
+      }
+    }, 0);
+    threadCacheRef.current.set(selectedId, {
+      messages: nextMessages,
+      notes: initialNotes.length > 0 ? initialNotes : cached?.notes ?? [],
+      hasMore: initialHasMoreMessages,
+    });
+    markConversationRead(selectedId);
+    appliedSelectedIdRef.current = selectedId;
+    reportClientConversationMetric("thread_ready_payload", {
+      conversationId: selectedId,
+      durationMs: startedAt ? durationSince(startedAt) : null,
+      messageCount: nextMessages.length,
+      hasCachedNotes: Boolean(cached?.notes?.length),
+    });
+    return () => window.clearTimeout(syncStateTimer);
+  }, [
+    initialHasMoreMessages,
+    initialMessages,
+    initialNotes,
+    loadNotesInBackground,
+    markConversationRead,
+    selectedId,
+  ]);
 
   useEffect(() => {
     if (!activeId) return;
-
-    // Deep-link /conversations/[id]: prefer SSR payload whenever the URL id changes.
-    // Avoids client-fetch skeletons (the main flicker when opening chats).
-    if (selectedId === activeId) {
-      if (appliedSelectedIdRef.current !== selectedId) {
-        setMessages(initialMessages);
-        setNotes(initialNotes);
-        setHasMoreMessages(initialHasMoreMessages);
-        setLoadingThread(false);
-        loadedThreadIdRef.current = activeId;
-        appliedSelectedIdRef.current = selectedId;
-        void createClient()
-          .from("conversations")
-          .update({ unread_count: 0 })
-          .eq("id", activeId);
-        setConversations((prev) =>
-          prev.map((c) => (c.id === activeId ? { ...c, unread_count: 0 } : c)),
-        );
-      }
-      return;
-    }
-
-    // Already showing this thread — avoid skeleton reload loops.
-    if (loadedThreadIdRef.current === activeId) return;
-
-    const supabase = createClient();
-    let cancelled = false;
-    const requestId = activeId;
-
-    async function load() {
-      setLoadingThread(true);
-      const [{ data: msgs }, { data: noteRows }] = await Promise.all([
-        supabase
-          .from("messages")
-          .select(
-            "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename",
-          )
-          .eq("conversation_id", requestId)
-          .order("created_at", { ascending: false })
-          .limit(MESSAGE_PAGE_SIZE),
-        supabase
-          .from("conversation_notes")
-          .select("id, body, created_at, profiles(full_name, email)")
-          .eq("conversation_id", requestId)
-          .order("created_at", { ascending: false }),
-      ]);
-      if (cancelled) return;
-      const page = ((msgs as MessageRow[]) ?? []).slice().reverse().map((m) => {
-        const cached = takeMediaPreview(m.id);
-        return cached ? { ...m, localPreviewUrl: cached } : m;
-      });
-      setMessages(page);
-      setHasMoreMessages((msgs?.length ?? 0) >= MESSAGE_PAGE_SIZE);
-      setNotes(
-        normalizeNotes(noteRows as Array<Record<string, unknown>> | null),
-      );
-      loadedThreadIdRef.current = requestId;
-      await supabase
-        .from("conversations")
-        .update({ unread_count: 0 })
-        .eq("id", requestId);
-      setConversations((prev) =>
-        prev.map((c) => (c.id === requestId ? { ...c, unread_count: 0 } : c)),
-      );
-      setLoadingThread(false);
-    }
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
-    // Intentionally only re-run when the active thread identity changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- SSR arrays read once per selectedId change
-  }, [activeId, selectedId]);
+    threadCacheRef.current.set(activeId, {
+      messages,
+      notes,
+      hasMore: hasMoreMessages,
+    });
+  }, [activeId, hasMoreMessages, messages, notes]);
 
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (reloadDebounceRef.current) {
+        window.clearTimeout(reloadDebounceRef.current);
+      }
+    };
   }, []);
 
   // nowMs refreshes window status every 30s
@@ -455,29 +502,40 @@ export function InboxView({
     });
   }
 
+  const prefetchConversationRoute = useCallback(
+    (id: string) => {
+      if (prefetchedConversationIdsRef.current.has(id)) return;
+      prefetchedConversationIdsRef.current.add(id);
+      router.prefetch(`/conversations/${id}`);
+    },
+    [router],
+  );
+
   function openConversation(id: string) {
-    if (id === selectedId || id === activeId) {
-      setPickedId(id);
+    if (id === selectedId) {
+      setPendingRouteId(null);
       return;
     }
-    // Keep the current thread painted until the next route SSR swaps in —
-    // clearing/skeleton here was the main “parpadeo” when opening a chat.
-    setPickedId(id);
-    router.push(`/conversations/${id}`);
+    setPendingRouteId(id);
+    openStartByConversationRef.current.set(id, perfNowMs());
+    reportClientConversationMetric("conversation_open_start", {
+      conversationId: id,
+    });
+    prefetchConversationRoute(id);
+    router.push(`/conversations/${id}`, { scroll: false });
   }
 
   function backToList() {
-    setPickedId(null);
+    setPendingRouteId(null);
     setMessages([]);
     setNotes([]);
     setHasMoreMessages(false);
     setDetailOpen(false);
-    loadedThreadIdRef.current = null;
     if (
       selectedId ||
       window.matchMedia("(max-width: 900px)").matches
     ) {
-      router.push("/conversations");
+      router.push("/conversations", { scroll: false });
     }
   }
 
@@ -793,12 +851,14 @@ export function InboxView({
               filteredConversations.map((c) => {
                 const contact = c.contacts;
                 const tag = c.conversation_tags?.[0]?.tags;
-                const activeRow = c.id === activeId;
+                const activeRow = c.id === highlightedId;
                 return (
                   <button
                     key={c.id}
                     type="button"
                     onClick={() => openConversation(c.id)}
+                    onMouseEnter={() => prefetchConversationRoute(c.id)}
+                    onFocus={() => prefetchConversationRoute(c.id)}
                     className={`chat-row w-full border-b border-[var(--line)] px-4 py-3 text-left transition ${
                       activeRow
                         ? "bg-[var(--accent-soft)]"
@@ -906,6 +966,7 @@ export function InboxView({
               </header>
 
               <MessageThread
+                activeConversationId={active.id}
                 messages={messages}
                 loadingThread={loadingThread}
                 loadingOlder={loadingOlder}
@@ -922,6 +983,14 @@ export function InboxView({
                 composerRef={composerRef}
                 onInsertEmoji={insertEmoji}
                 onResizeComposer={resizeComposer}
+                onFirstPaint={(conversationId) => {
+                  const startedAt =
+                    openStartByConversationRef.current.get(conversationId);
+                  reportClientConversationMetric("thread_first_paint", {
+                    conversationId,
+                    durationMs: startedAt ? durationSince(startedAt) : null,
+                  });
+                }}
               />
             </div>
           ) : activeId ? (

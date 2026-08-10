@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Bell } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -18,6 +19,7 @@ type NotificationItem = {
 };
 
 export function NotificationBell({ userId }: { userId: string }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [live, setLive] = useState(false);
@@ -38,13 +40,13 @@ export function NotificationBell({ userId }: { userId: string }) {
           action: {
             label: "Abrir",
             onClick: () => {
-              window.location.href = `/conversations/${item.conversationId}`;
+              router.push(`/conversations/${item.conversationId}`);
             },
           },
         });
       }
     },
-    [],
+    [router],
   );
 
   useEffect(() => {
@@ -156,16 +158,14 @@ export function NotificationBell({ userId }: { userId: string }) {
         .on(
           "postgres_changes",
           { event: "UPDATE", schema: "public", table: "conversations" },
-          async (payload) => {
+          (payload) => {
             const row = payload.new as {
               id?: string;
               assignee_id?: string | null;
               last_message_preview?: string | null;
-              last_message_at?: string | null;
             };
             const old = payload.old as {
               assignee_id?: string | null;
-              last_message_at?: string | null;
             };
             if (!row?.id) return;
 
@@ -183,23 +183,6 @@ export function NotificationBell({ userId }: { userId: string }) {
                 conversationId: row.id,
                 createdAt: new Date().toISOString(),
               });
-            }
-
-            // Fallback: conversation bumped — fetch latest inbound message
-            if (
-              row.last_message_at &&
-              row.last_message_at !== old?.last_message_at
-            ) {
-              const { data: latest } = await supabase
-                .from("messages")
-                .select("id, body, created_at, direction")
-                .eq("conversation_id", row.id)
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-              if (latest?.direction === "inbound" && latest.id) {
-                await notifyInbound(row.id, latest);
-              }
             }
           },
         )
@@ -235,7 +218,7 @@ export function NotificationBell({ userId }: { userId: string }) {
     };
   }, [userId, push]);
 
-  // Safety net: poll recent inbound while the tab is open (covers Realtime gaps)
+  // Safety net: poll only while realtime is not live.
   useEffect(() => {
     if (!userId) return;
     const supabase = createClient();
@@ -265,11 +248,11 @@ export function NotificationBell({ userId }: { userId: string }) {
     };
 
     const id = window.setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || live) return;
       void tick();
-    }, 30_000);
+    }, 45_000);
     return () => window.clearInterval(id);
-  }, [userId, push]);
+  }, [live, userId, push]);
 
   function markAllRead() {
     setItems((prev) => prev.map((i) => ({ ...i, read: true })));

@@ -18,11 +18,7 @@ export function normalizeConversations(
           tag_id: ct.tag_id,
           tags: Array.isArray(ct.tags) ? ct.tags[0] : ct.tags,
         }))
-        .filter(
-          (ct) =>
-            ct.tags &&
-            !(ct.tags as { is_kanban_column?: boolean }).is_kanban_column,
-        );
+        .filter((ct) => Boolean(ct.tags));
 
       return {
         ...(c as unknown as ConversationRow),
