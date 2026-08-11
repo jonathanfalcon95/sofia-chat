@@ -50,21 +50,31 @@ export default async function KanbanPage({
   if (companyId) tagsQuery = tagsQuery.eq("company_id", companyId);
   const { data: tags } = await tagsQuery;
 
-  const { cards, hasMoreByTag, offsetByTag } =
-    companyId && (tags?.length ?? 0) > 0
-      ? await loadAllKanbanColumns(
-          supabase,
-          {
-            companyId,
-            inboxId: inboxId || undefined,
-            q: q || undefined,
-            assignee,
-            userId: session?.userId,
-            pageSize,
-          },
-          tags ?? [],
-        )
-      : { cards: [], hasMoreByTag: {}, offsetByTag: {} };
+  let cards: Awaited<ReturnType<typeof loadAllKanbanColumns>>["cards"] = [];
+  let hasMoreByTag: Record<string, boolean> = {};
+  let offsetByTag: Record<string, number> = {};
+
+  if (companyId && (tags?.length ?? 0) > 0) {
+    try {
+      const loaded = await loadAllKanbanColumns(
+        supabase,
+        {
+          companyId,
+          inboxId: inboxId || undefined,
+          q: q || undefined,
+          assignee,
+          userId: session?.userId,
+          pageSize,
+        },
+        tags ?? [],
+      );
+      cards = loaded.cards;
+      hasMoreByTag = loaded.hasMoreByTag;
+      offsetByTag = loaded.offsetByTag;
+    } catch (err) {
+      console.error("[kanban] load failed", err);
+    }
+  }
 
   return (
     <div>
