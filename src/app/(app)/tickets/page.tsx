@@ -6,11 +6,27 @@ import {
   sessionTicketSupportCompanyIds,
 } from "@/lib/rbac/session";
 import { TicketsManager } from "@/components/tickets/tickets-manager";
+import {
+  firstSearchParam,
+  ilikePattern,
+  parsePageParams,
+} from "@/lib/pagination";
 
-export default async function TicketsPage() {
+export default async function TicketsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const supabase = await createClient();
   const session = await getAppSession();
   if (!session) return null;
+
+  const sp = await searchParams;
+  const { page, pageSize, from, to } = parsePageParams(sp);
+  const q = (firstSearchParam(sp.q) ?? "").trim();
+  const status = firstSearchParam(sp.status) ?? "all";
+  const priority = firstSearchParam(sp.priority) ?? "all";
+  const assignee = firstSearchParam(sp.assignee) ?? "all";
 
   const isSupportViewer =
     session.isPlatformAdmin || sessionIsTicketSupport(session);
@@ -34,16 +50,31 @@ export default async function TicketsPage() {
         contacts ( name, phone_number )
       )
     `,
+      { count: "exact" },
     )
     .order("created_at", { ascending: false });
 
-  // Agents only see tickets they created; support sees company queue.
   if (!isSupportViewer) {
     ticketsQuery = ticketsQuery.eq("created_by", session.userId);
   }
+  if (status !== "all") ticketsQuery = ticketsQuery.eq("status", status);
+  if (priority !== "all") ticketsQuery = ticketsQuery.eq("priority", priority);
+  if (isSupportViewer) {
+    if (assignee === "mine") {
+      ticketsQuery = ticketsQuery.eq("assignee_id", session.userId);
+    } else if (assignee === "unassigned") {
+      ticketsQuery = ticketsQuery.is("assignee_id", null);
+    }
+  }
+  if (q) {
+    const pattern = ilikePattern(q);
+    ticketsQuery = ticketsQuery.or(
+      `title.ilike."${pattern}",description.ilike."${pattern}"`,
+    );
+  }
 
-  const [{ data: tickets }, supportAgents] = await Promise.all([
-    ticketsQuery,
+  const [{ data: tickets, count }, supportAgents] = await Promise.all([
+    ticketsQuery.range(from, to),
     listCompanySupportAgents(),
   ]);
 
@@ -52,7 +83,7 @@ export default async function TicketsPage() {
       const companies = Array.isArray(t.companies)
         ? t.companies[0]
         : t.companies;
-      const assignee = Array.isArray(t.assignee) ? t.assignee[0] : t.assignee;
+      const assigneeRow = Array.isArray(t.assignee) ? t.assignee[0] : t.assignee;
       const creator = Array.isArray(t.creator) ? t.creator[0] : t.creator;
       const responder = Array.isArray(t.responder)
         ? t.responder[0]
@@ -79,8 +110,10 @@ export default async function TicketsPage() {
           (t.support_responded_at as string | null) ?? null,
         company_name: (companies as { name?: string } | null)?.name ?? "—",
         assignee:
-          (assignee as { full_name: string | null; email: string } | null) ??
-          null,
+          (assigneeRow as {
+            full_name: string | null;
+            email: string;
+          } | null) ?? null,
         creator:
           (creator as { full_name: string | null; email: string } | null) ??
           null,
@@ -100,6 +133,10 @@ export default async function TicketsPage() {
       currentUserId={session.userId}
       supportCompanyIds={supportCompanyIds}
       isSupportViewer={isSupportViewer}
+      total={count ?? 0}
+      page={page}
+      pageSize={pageSize}
+      filters={{ q, status, priority, assignee }}
     />
   );
 }

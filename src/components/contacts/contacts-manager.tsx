@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Pencil, Plus, Trash2 } from "lucide-react";
@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { ListPagination } from "@/components/ui/list-pagination";
 import {
   Dialog,
   DialogContent,
@@ -49,28 +50,28 @@ export function ContactsManager({
   companies,
   canManageTags,
   canAssignTags,
+  total,
+  page,
+  pageSize,
+  filters,
 }: {
   contacts: Contact[];
   contactTags: ContactTag[];
   companies: Array<{ id: string; name: string }>;
   canManageTags: boolean;
   canAssignTags: boolean;
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: { q: string; companyId: string; tagId: string };
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
-  const [filterTagId, setFilterTagId] = useState("");
   const [tagName, setTagName] = useState("");
   const [tagColor, setTagColor] = useState("#3b82f6");
   const [tagCompanyId, setTagCompanyId] = useState(companies[0]?.id ?? "");
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
-
-  const filtered = useMemo(() => {
-    if (!filterTagId) return contacts;
-    return contacts.filter((c) =>
-      c.contact_tags.some((t) => t.tag_id === filterTagId),
-    );
-  }, [contacts, filterTagId]);
 
   function openEdit(c: Contact) {
     setEditing(c);
@@ -82,12 +83,33 @@ export function ContactsManager({
       <PageHeader
         title="Contactos"
         description="Contactos sincronizados desde WhatsApp con tags personalizados"
-        actions={
-          <Select
-            value={filterTagId}
-            onChange={(e) => setFilterTagId(e.target.value)}
-            className="min-w-[180px]"
-          >
+      />
+
+      <form method="get" className="grid gap-3 sm:grid-cols-4">
+        <input type="hidden" name="page" value="1" />
+        <input type="hidden" name="pageSize" value={String(pageSize)} />
+        <div className="space-y-1.5">
+          <Label>Buscar</Label>
+          <Input
+            name="q"
+            defaultValue={filters.q}
+            placeholder="Nombre o teléfono"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Empresa</Label>
+          <Select name="companyId" defaultValue={filters.companyId}>
+            <option value="">Todas</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Tag</Label>
+          <Select name="tagId" defaultValue={filters.tagId}>
             <option value="">Todos los tags</option>
             {contactTags.map((t) => (
               <option key={t.id} value={t.id}>
@@ -95,8 +117,13 @@ export function ContactsManager({
               </option>
             ))}
           </Select>
-        }
-      />
+        </div>
+        <div className="flex items-end">
+          <Button type="submit" variant="secondary" className="w-full">
+            Filtrar
+          </Button>
+        </div>
+      </form>
 
       {canManageTags ? (
         <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
@@ -206,7 +233,7 @@ export function ContactsManager({
           </TR>
         </THead>
         <TBody>
-          {filtered.map((c) => (
+          {contacts.map((c) => (
             <TR key={c.id}>
               <TD className="font-medium">{c.name || "—"}</TD>
               <TD>{c.phone_number}</TD>
@@ -238,6 +265,17 @@ export function ContactsManager({
           ))}
         </TBody>
       </Table>
+
+      <ListPagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        baseParams={{
+          q: filters.q || undefined,
+          companyId: filters.companyId || undefined,
+          tagId: filters.tagId || undefined,
+        }}
+      />
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent>

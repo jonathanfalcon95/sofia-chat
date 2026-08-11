@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ListPagination } from "@/components/ui/list-pagination";
 import {
   Dialog,
   DialogContent,
@@ -86,22 +87,23 @@ export function CompaniesManager({
   companies,
   inboxes,
   canManage,
+  total,
+  page,
+  pageSize,
+  filters,
 }: {
   companies: Company[];
   inboxes: InboxOption[];
   canManage: boolean;
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: { q: string; status: string; numbers: string };
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
   const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">(
-    "all",
-  );
-  const [numbersFilter, setNumbersFilter] = useState<"all" | "with" | "without">(
-    "all",
-  );
   const [createInboxIds, setCreateInboxIds] = useState<string[]>([]);
   const [editInboxIds, setEditInboxIds] = useState<string[]>([]);
 
@@ -110,25 +112,11 @@ export function CompaniesManager({
     [inboxes],
   );
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return companies.filter((c) => {
-      if (statusFilter === "active" && !c.is_active) return false;
-      if (statusFilter === "inactive" && c.is_active) return false;
-      if (numbersFilter === "with" && c.inbox_count === 0) return false;
-      if (numbersFilter === "without" && c.inbox_count > 0) return false;
-      if (!q) return true;
-      return (
-        c.name.toLowerCase().includes(q) ||
-        c.slug.toLowerCase().includes(q) ||
-        (c.guid_company || "").toLowerCase().includes(q)
-      );
-    });
-  }, [companies, query, statusFilter, numbersFilter]);
-
   function optionsForCompany(companyId: string | null) {
     return inboxes.filter(
-      (i) => i.company_id == null || (companyId != null && i.company_id === companyId),
+      (i) =>
+        i.company_id == null ||
+        (companyId != null && i.company_id === companyId),
     );
   }
 
@@ -151,23 +139,20 @@ export function CompaniesManager({
         }
       />
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+      <form method="get" className="mb-4 grid gap-3 sm:grid-cols-4">
+        <input type="hidden" name="page" value="1" />
+        <input type="hidden" name="pageSize" value={String(pageSize)} />
         <div className="space-y-1.5">
           <Label>Buscar</Label>
           <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            name="q"
+            defaultValue={filters.q}
             placeholder="Nombre, slug o GUID"
           />
         </div>
         <div className="space-y-1.5">
           <Label>Estado</Label>
-          <Select
-            value={statusFilter}
-            onChange={(e) =>
-              setStatusFilter(e.target.value as "all" | "active" | "inactive")
-            }
-          >
+          <Select name="status" defaultValue={filters.status}>
             <option value="all">Todas</option>
             <option value="active">Activas</option>
             <option value="inactive">Inactivas</option>
@@ -175,18 +160,18 @@ export function CompaniesManager({
         </div>
         <div className="space-y-1.5">
           <Label>Números</Label>
-          <Select
-            value={numbersFilter}
-            onChange={(e) =>
-              setNumbersFilter(e.target.value as "all" | "with" | "without")
-            }
-          >
+          <Select name="numbers" defaultValue={filters.numbers}>
             <option value="all">Todas</option>
             <option value="with">Con números</option>
             <option value="without">Sin números</option>
           </Select>
         </div>
-      </div>
+        <div className="flex items-end">
+          <Button type="submit" variant="secondary" className="w-full">
+            Filtrar
+          </Button>
+        </div>
+      </form>
 
       <Table>
         <THead>
@@ -200,7 +185,7 @@ export function CompaniesManager({
           </TR>
         </THead>
         <TBody>
-          {filtered.map((c) => (
+          {companies.map((c) => (
             <TR key={c.id}>
               <TD className="font-medium">{c.name}</TD>
               <TD>{c.slug}</TD>
@@ -229,6 +214,17 @@ export function CompaniesManager({
           ))}
         </TBody>
       </Table>
+
+      <ListPagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        baseParams={{
+          q: filters.q || undefined,
+          status: filters.status !== "all" ? filters.status : undefined,
+          numbers: filters.numbers !== "all" ? filters.numbers : undefined,
+        }}
+      />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>

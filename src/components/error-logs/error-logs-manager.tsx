@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ListPagination } from "@/components/ui/list-pagination";
 import {
   Dialog,
   DialogContent,
@@ -93,56 +94,30 @@ function statusBadgeClass(status: string) {
 export function ErrorLogsManager({
   logs,
   companies,
+  sources,
+  total,
+  page,
+  pageSize,
+  filters,
 }: {
   logs: ErrorLogRow[];
   companies: { id: string; name: string }[];
+  sources: string[];
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: {
+    q: string;
+    companyId: string;
+    status: string;
+    level: string;
+    source: string;
+  };
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [companyFilter, setCompanyFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [levelFilter, setLevelFilter] = useState<string>("all");
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<ErrorLogRow | null>(null);
   const [note, setNote] = useState("");
-
-  const sources = useMemo(() => {
-    return Array.from(new Set(logs.map((l) => l.source))).sort();
-  }, [logs]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return logs.filter((row) => {
-      if (companyFilter === "none" && row.company_id) return false;
-      if (
-        companyFilter !== "all" &&
-        companyFilter !== "none" &&
-        row.company_id !== companyFilter
-      ) {
-        return false;
-      }
-      if (statusFilter !== "all" && row.status !== statusFilter) return false;
-      if (levelFilter !== "all" && row.level !== levelFilter) return false;
-      if (sourceFilter !== "all" && row.source !== sourceFilter) return false;
-      if (!q) return true;
-      return (
-        row.message.toLowerCase().includes(q) ||
-        row.source.toLowerCase().includes(q) ||
-        (row.error_code?.toLowerCase().includes(q) ?? false) ||
-        (row.error_name?.toLowerCase().includes(q) ?? false) ||
-        (row.request_id?.toLowerCase().includes(q) ?? false) ||
-        (row.company_name?.toLowerCase().includes(q) ?? false)
-      );
-    });
-  }, [
-    logs,
-    companyFilter,
-    statusFilter,
-    levelFilter,
-    sourceFilter,
-    query,
-  ]);
 
   function openDetail(row: ErrorLogRow) {
     setSelected(row);
@@ -174,10 +149,12 @@ export function ErrorLogsManager({
         description="Incidencias del sistema. Filtra por empresa y triaja el estado."
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <form method="get" className="mb-4 flex flex-wrap items-end gap-2">
+        <input type="hidden" name="page" value="1" />
+        <input type="hidden" name="pageSize" value={String(pageSize)} />
         <Select
-          value={companyFilter}
-          onChange={(e) => setCompanyFilter(e.target.value)}
+          name="companyId"
+          defaultValue={filters.companyId}
           className="w-auto min-w-[180px]"
           aria-label="Filtrar por empresa"
         >
@@ -190,8 +167,8 @@ export function ErrorLogsManager({
           ))}
         </Select>
         <Select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          name="status"
+          defaultValue={filters.status}
           className="w-auto min-w-[150px]"
           aria-label="Filtrar por estado"
         >
@@ -203,8 +180,8 @@ export function ErrorLogsManager({
           ))}
         </Select>
         <Select
-          value={levelFilter}
-          onChange={(e) => setLevelFilter(e.target.value)}
+          name="level"
+          defaultValue={filters.level}
           className="w-auto min-w-[120px]"
           aria-label="Filtrar por nivel"
         >
@@ -216,8 +193,8 @@ export function ErrorLogsManager({
           ))}
         </Select>
         <Select
-          value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value)}
+          name="source"
+          defaultValue={filters.source}
           className="w-auto min-w-[180px]"
           aria-label="Filtrar por origen"
         >
@@ -229,13 +206,16 @@ export function ErrorLogsManager({
           ))}
         </Select>
         <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          name="q"
+          defaultValue={filters.q}
           placeholder="Buscar mensaje, código…"
           className="max-w-xs"
           aria-label="Buscar en logs"
         />
-      </div>
+        <Button type="submit" variant="secondary">
+          Filtrar
+        </Button>
+      </form>
 
       <div className="overflow-x-auto rounded-xl border border-[var(--line)]">
         <Table>
@@ -250,14 +230,14 @@ export function ErrorLogsManager({
             </TR>
           </THead>
           <TBody>
-            {filtered.length === 0 ? (
+            {logs.length === 0 ? (
               <TR>
                 <TD colSpan={6} className="py-8 text-center text-[var(--muted)]">
                   No hay incidencias con estos filtros.
                 </TD>
               </TR>
             ) : (
-              filtered.map((row) => (
+              logs.map((row) => (
                 <TR
                   key={row.id}
                   className="cursor-pointer hover:bg-[var(--surface-2)]"
@@ -296,6 +276,20 @@ export function ErrorLogsManager({
           </TBody>
         </Table>
       </div>
+
+      <ListPagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        baseParams={{
+          q: filters.q || undefined,
+          companyId:
+            filters.companyId !== "all" ? filters.companyId : undefined,
+          status: filters.status !== "all" ? filters.status : undefined,
+          level: filters.level !== "all" ? filters.level : undefined,
+          source: filters.source !== "all" ? filters.source : undefined,
+        }}
+      />
 
       <Dialog
         open={Boolean(selected)}

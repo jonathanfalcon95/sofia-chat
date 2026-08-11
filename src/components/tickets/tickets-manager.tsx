@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
@@ -30,6 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ListPagination } from "@/components/ui/list-pagination";
 import {
   Dialog,
   DialogContent,
@@ -37,7 +38,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
 
 type SupportAgent = {
   id: string;
@@ -66,14 +66,16 @@ type TicketRow = {
   contact: { name: string | null; phone_number: string } | null;
 };
 
-type AssigneeFilter = "all" | "mine" | "unassigned";
-
 export function TicketsManager({
   tickets,
   supportAgents,
   currentUserId,
   supportCompanyIds,
   isSupportViewer,
+  total,
+  page,
+  pageSize,
+  filters,
 }: {
   tickets: TicketRow[];
   supportAgents: SupportAgent[];
@@ -81,13 +83,18 @@ export function TicketsManager({
   /** null = platform admin (all companies). */
   supportCompanyIds: string[] | null;
   isSupportViewer: boolean;
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: {
+    q: string;
+    status: string;
+    priority: string;
+    assignee: string;
+  };
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [priorityFilter, setPriorityFilter] = useState<string>("all");
-  const [assigneeFilter, setAssigneeFilter] =
-    useState<AssigneeFilter>("all");
   const [editing, setEditing] = useState<TicketRow | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -104,18 +111,6 @@ export function TicketsManager({
     if (canSupportTicket(ticket.company_id)) return true;
     return ticket.created_by === currentUserId;
   }
-
-  const filtered = useMemo(() => {
-    return tickets.filter((t) => {
-      if (statusFilter !== "all" && t.status !== statusFilter) return false;
-      if (priorityFilter !== "all" && t.priority !== priorityFilter)
-        return false;
-      if (assigneeFilter === "mine" && t.assignee_id !== currentUserId)
-        return false;
-      if (assigneeFilter === "unassigned" && t.assignee_id) return false;
-      return true;
-    });
-  }, [tickets, statusFilter, priorityFilter, assigneeFilter, currentUserId]);
 
   function agentsForCompany(companyId: string) {
     return supportAgents.filter((a) => a.company_id === companyId);
@@ -140,66 +135,75 @@ export function TicketsManager({
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="w-auto min-w-[140px]"
-          aria-label="Filtrar por estado"
-        >
-          <option value="all">Todos los estados</option>
-          {TICKET_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {STATUS_LABELS[s]}
-            </option>
-          ))}
-        </Select>
-        <Select
-          value={priorityFilter}
-          onChange={(e) => setPriorityFilter(e.target.value)}
-          className="w-auto min-w-[140px]"
-          aria-label="Filtrar por prioridad"
-        >
-          <option value="all">Todas las prioridades</option>
-          {TICKET_PRIORITIES.map((p) => (
-            <option key={p} value={p}>
-              {PRIORITY_LABELS[p]}
-            </option>
-          ))}
-        </Select>
-        {isSupportViewer ? (
-          <div className="flex rounded-lg border border-[var(--line)] p-0.5 text-xs">
-            {(
-              [
-                ["all", "Todas"],
-                ["mine", "Mías"],
-                ["unassigned", "Sin asignar"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setAssigneeFilter(value)}
-                className={cn(
-                  "rounded-md px-2.5 py-1.5 transition",
-                  assigneeFilter === value
-                    ? "bg-[var(--accent-soft)] font-medium text-[var(--ink)]"
-                    : "text-[var(--muted)] hover:text-[var(--ink)]",
-                )}
-              >
-                {label}
-              </button>
+      <form method="get" className="mb-4 flex flex-wrap items-end gap-2">
+        <input type="hidden" name="page" value="1" />
+        <input type="hidden" name="pageSize" value={String(pageSize)} />
+        <div className="space-y-1.5">
+          <Label>Buscar</Label>
+          <Input
+            name="q"
+            defaultValue={filters.q}
+            placeholder="Título o descripción"
+            className="min-w-[180px]"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Estado</Label>
+          <Select
+            name="status"
+            defaultValue={filters.status}
+            className="w-auto min-w-[140px]"
+          >
+            <option value="all">Todos los estados</option>
+            {TICKET_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {STATUS_LABELS[s]}
+              </option>
             ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Prioridad</Label>
+          <Select
+            name="priority"
+            defaultValue={filters.priority}
+            className="w-auto min-w-[140px]"
+          >
+            <option value="all">Todas las prioridades</option>
+            {TICKET_PRIORITIES.map((p) => (
+              <option key={p} value={p}>
+                {PRIORITY_LABELS[p]}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {isSupportViewer ? (
+          <div className="space-y-1.5">
+            <Label>Asignación</Label>
+            <Select
+              name="assignee"
+              defaultValue={filters.assignee}
+              className="w-auto min-w-[140px]"
+            >
+              <option value="all">Todas</option>
+              <option value="mine">Mías</option>
+              <option value="unassigned">Sin asignar</option>
+            </Select>
           </div>
-        ) : null}
-      </div>
+        ) : (
+          <input type="hidden" name="assignee" value="all" />
+        )}
+        <Button type="submit" variant="secondary">
+          Filtrar
+        </Button>
+      </form>
 
-      {filtered.length === 0 ? (
+      {tickets.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--line)] px-6 py-16 text-center">
           <Ticket className="mb-3 h-8 w-8 text-[var(--muted)]" />
           <p className="text-sm font-medium">Sin tickets</p>
           <p className="mt-1 max-w-sm text-xs text-[var(--muted)]">
-            {tickets.length === 0
+            {total === 0
               ? "Cuando un agente escale una incidencia desde el chat, aparecerá aquí."
               : "No hay tickets que coincidan con los filtros actuales."}
           </p>
@@ -222,7 +226,7 @@ export function TicketsManager({
               </TR>
             </THead>
             <TBody>
-              {filtered.map((t) => {
+              {tickets.map((t) => {
                 const support = canSupportTicket(t.company_id);
                 return (
                   <TR key={t.id}>
@@ -382,6 +386,19 @@ export function TicketsManager({
           </Table>
         </div>
       )}
+
+      <ListPagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        baseParams={{
+          q: filters.q || undefined,
+          status: filters.status !== "all" ? filters.status : undefined,
+          priority: filters.priority !== "all" ? filters.priority : undefined,
+          assignee:
+            filters.assignee !== "all" ? filters.assignee : undefined,
+        }}
+      />
 
       <Dialog
         open={Boolean(editing)}

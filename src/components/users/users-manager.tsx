@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ListPagination } from "@/components/ui/list-pagination";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,10 @@ export function UsersManager({
   roles,
   inboxes,
   memberships,
+  total,
+  page,
+  pageSize,
+  filters,
 }: {
   companies: Array<{ id: string; name: string }>;
   roles: Array<{ id: string; name: string; company_id: string | null }>;
@@ -46,12 +51,30 @@ export function UsersManager({
     is_active?: boolean;
   }>;
   memberships: Membership[];
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: {
+    q: string;
+    companyId: string;
+    roleId: string;
+    status: string;
+  };
 }) {
   const router = useRouter();
   const [openCreate, setOpenCreate] = useState(false);
   const [editing, setEditing] = useState<Membership | null>(null);
   const [companyId, setCompanyId] = useState(companies[0]?.id ?? "");
+  const [filterCompanyId, setFilterCompanyId] = useState(filters.companyId);
   const [loading, setLoading] = useState(false);
+
+  const filterRoles = useMemo(
+    () =>
+      filterCompanyId
+        ? roles.filter((r) => r.company_id === filterCompanyId)
+        : roles,
+    [roles, filterCompanyId],
+  );
 
   const companyRoles = useMemo(
     () => roles.filter((r) => r.company_id === companyId),
@@ -170,6 +193,58 @@ export function UsersManager({
         }
       />
 
+      <form method="get" className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <input type="hidden" name="page" value="1" />
+        <input type="hidden" name="pageSize" value={String(pageSize)} />
+        <div className="space-y-1.5">
+          <Label>Buscar</Label>
+          <Input
+            name="q"
+            defaultValue={filters.q}
+            placeholder="Nombre o email"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Empresa</Label>
+          <Select
+            name="companyId"
+            value={filterCompanyId}
+            onChange={(e) => setFilterCompanyId(e.target.value)}
+          >
+            <option value="">Todas</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Rol</Label>
+          <Select name="roleId" defaultValue={filters.roleId}>
+            <option value="">Todos</option>
+            {filterRoles.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Estado</Label>
+          <Select name="status" defaultValue={filters.status}>
+            <option value="all">Todos</option>
+            <option value="active">Activos</option>
+            <option value="inactive">Inactivos</option>
+          </Select>
+        </div>
+        <div className="flex items-end">
+          <Button type="submit" variant="secondary" className="w-full">
+            Filtrar
+          </Button>
+        </div>
+      </form>
+
       <Table>
         <THead>
           <TR>
@@ -225,6 +300,18 @@ export function UsersManager({
           })}
         </TBody>
       </Table>
+
+      <ListPagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        baseParams={{
+          q: filters.q || undefined,
+          companyId: filters.companyId || undefined,
+          roleId: filters.roleId || undefined,
+          status: filters.status !== "all" ? filters.status : undefined,
+        }}
+      />
 
       <Dialog open={openCreate} onOpenChange={setOpenCreate}>
         <DialogContent>

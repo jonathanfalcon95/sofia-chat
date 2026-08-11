@@ -1,32 +1,47 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import { setConversationTag } from "@/app/actions/conversations";
+import { loadMoreKanbanCards } from "@/app/actions/kanban";
+import { Button } from "@/components/ui/button";
+import type { KanbanCard } from "@/lib/kanban/load-kanban-cards";
 
 type Tag = { id: string; name: string; color: string; position: number };
-type Card = {
-  /** Active conversation id used for drag + open chat */
-  id: string;
-  contactId: string;
-  preview: string | null;
-  contactName: string;
-  phone: string;
-  inboxName: string | null;
-  tagId: string | null;
-};
 
 export function KanbanBoard({
   tags,
   cards,
+  hasMoreByTag,
+  offsetByTag,
+  pageSize,
+  filters,
 }: {
   tags: Tag[];
-  cards: Card[];
+  cards: KanbanCard[];
+  hasMoreByTag: Record<string, boolean>;
+  offsetByTag: Record<string, number>;
+  pageSize: number;
+  filters: {
+    companyId: string;
+    inboxId?: string;
+    q?: string;
+    assignee?: "all" | "mine" | "unassigned";
+  };
 }) {
   const [items, setItems] = useState(cards);
+  const [hasMore, setHasMore] = useState(hasMoreByTag);
+  const [offsets, setOffsets] = useState(offsetByTag);
   const [pending, startTransition] = useTransition();
+  const [loadingTag, setLoadingTag] = useState<string | null>(null);
+
+  useEffect(() => {
+    setItems(cards);
+    setHasMore(hasMoreByTag);
+    setOffsets(offsetByTag);
+  }, [cards, hasMoreByTag, offsetByTag]);
 
   const columns = useMemo(() => {
     return [...tags]
@@ -58,11 +73,46 @@ export function KanbanBoard({
     });
   }
 
+  function onLoadMore(tagId: string, isFirstColumn: boolean) {
+    if (!filters.companyId || loadingTag) return;
+    setLoadingTag(tagId);
+    startTransition(async () => {
+      try {
+        const result = await loadMoreKanbanCards({
+          tagId,
+          offset: offsets[tagId] ?? 0,
+          pageSize,
+          companyId: filters.companyId,
+          inboxId: filters.inboxId,
+          q: filters.q,
+          assignee: filters.assignee,
+          includeUntagged: isFirstColumn,
+        });
+        setItems((prev) => {
+          const seen = new Set(prev.map((c) => c.contactId));
+          const next = [...prev];
+          for (const card of result.cards) {
+            if (seen.has(card.contactId)) continue;
+            seen.add(card.contactId);
+            next.push(card);
+          }
+          return next;
+        });
+        setHasMore((prev) => ({ ...prev, [tagId]: result.hasMore }));
+        setOffsets((prev) => ({ ...prev, [tagId]: result.nextOffset }));
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Error al cargar");
+      } finally {
+        setLoadingTag(null);
+      }
+    });
+  }
+
   return (
     <div
       className={`flex gap-3 overflow-x-auto pb-3 ${pending ? "opacity-80" : ""}`}
     >
-      {columns.map(({ tag, cards: colCards }) => (
+      {columns.map(({ tag, cards: colCards }, index) => (
         <div
           key={tag.id}
           onDragOver={(e) => e.preventDefault()}
@@ -121,6 +171,18 @@ export function KanbanBoard({
               </div>
             ))}
           </div>
+          {hasMore[tag.id] ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mt-3 w-full"
+              loading={loadingTag === tag.id}
+              onClick={() => onLoadMore(tag.id, index === 0)}
+            >
+              Cargar más
+            </Button>
+          ) : null}
         </div>
       ))}
     </div>

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { ListPagination } from "@/components/ui/list-pagination";
 import {
   Dialog,
   DialogContent,
@@ -33,10 +34,18 @@ export function RolesManager({
   roles,
   companies,
   permissions,
+  total,
+  page,
+  pageSize,
+  filters,
 }: {
   roles: RoleRow[];
   companies: Array<{ id: string; name: string }>;
   permissions: Array<{ code: string; description: string }>;
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: { q: string; companyId: string };
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -54,6 +63,31 @@ export function RolesManager({
           </Button>
         }
       />
+
+      <form method="get" className="mb-4 grid gap-3 sm:grid-cols-3">
+        <input type="hidden" name="page" value="1" />
+        <input type="hidden" name="pageSize" value={String(pageSize)} />
+        <div className="space-y-1.5">
+          <Label>Buscar</Label>
+          <Input name="q" defaultValue={filters.q} placeholder="Nombre del rol" />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Empresa</Label>
+          <Select name="companyId" defaultValue={filters.companyId}>
+            <option value="">Todas</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="flex items-end">
+          <Button type="submit" variant="secondary" className="w-full">
+            Filtrar
+          </Button>
+        </div>
+      </form>
 
       <div className="grid gap-3">
         {roles.map((role) => (
@@ -89,6 +123,16 @@ export function RolesManager({
           </div>
         ))}
       </div>
+
+      <ListPagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        baseParams={{
+          q: filters.q || undefined,
+          companyId: filters.companyId || undefined,
+        }}
+      />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[85vh] overflow-auto">

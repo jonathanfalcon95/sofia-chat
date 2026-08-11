@@ -1,32 +1,70 @@
 import { createClient } from "@/lib/supabase/server";
 import { requireAnyPermission } from "@/lib/rbac/require-permission";
 import { ErrorLogsManager } from "@/components/error-logs/error-logs-manager";
+import {
+  firstSearchParam,
+  ilikePattern,
+  parsePageParams,
+} from "@/lib/pagination";
 
-export default async function ErrorLogsPage() {
+export default async function ErrorLogsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireAnyPermission("error_logs.view");
+  const sp = await searchParams;
+  const { page, pageSize, from, to } = parsePageParams(sp);
+  const q = (firstSearchParam(sp.q) ?? "").trim();
+  const companyId = firstSearchParam(sp.companyId) ?? "all";
+  const status = firstSearchParam(sp.status) ?? "all";
+  const level = firstSearchParam(sp.level) ?? "all";
+  const source = firstSearchParam(sp.source) ?? "all";
+
   const supabase = await createClient();
 
-  const [{ data: logs }, { data: companies }] = await Promise.all([
-    supabase
-      .from("error_logs")
-      .select(
-        `
-        id, created_at, updated_at, level, status, source, message,
-        error_name, error_code, http_status, stack, context,
-        company_id, user_id, request_id,
-        resolved_at, resolved_by, resolution_note,
-        companies ( id, name ),
-        actor:profiles!error_logs_user_id_fkey ( full_name, email ),
-        resolver:profiles!error_logs_resolved_by_fkey ( full_name, email )
-      `,
-      )
-      .order("created_at", { ascending: false })
-      .limit(500),
+  const [{ data: companies }, { data: sourceRows }] = await Promise.all([
     supabase
       .from("companies")
       .select("id, name")
       .order("name", { ascending: true }),
+    supabase.from("error_logs").select("source").limit(1000),
   ]);
+
+  const sources = Array.from(
+    new Set((sourceRows ?? []).map((r) => r.source as string).filter(Boolean)),
+  ).sort();
+
+  let query = supabase
+    .from("error_logs")
+    .select(
+      `
+      id, created_at, updated_at, level, status, source, message,
+      error_name, error_code, http_status, stack, context,
+      company_id, user_id, request_id,
+      resolved_at, resolved_by, resolution_note,
+      companies ( id, name ),
+      actor:profiles!error_logs_user_id_fkey ( full_name, email ),
+      resolver:profiles!error_logs_resolved_by_fkey ( full_name, email )
+    `,
+      { count: "exact" },
+    )
+    .order("created_at", { ascending: false });
+
+  if (companyId === "none") query = query.is("company_id", null);
+  else if (companyId !== "all" && companyId)
+    query = query.eq("company_id", companyId);
+  if (status !== "all") query = query.eq("status", status);
+  if (level !== "all") query = query.eq("level", level);
+  if (source !== "all" && source) query = query.eq("source", source);
+  if (q) {
+    const pattern = ilikePattern(q);
+    query = query.or(
+      `message.ilike."${pattern}",source.ilike."${pattern}",error_code.ilike."${pattern}",error_name.ilike."${pattern}",request_id.ilike."${pattern}"`,
+    );
+  }
+
+  const { data: logs, count } = await query.range(from, to);
 
   const normalized = (logs ?? []).map((row) => {
     const company = Array.isArray(row.companies)
@@ -79,6 +117,11 @@ export default async function ErrorLogsPage() {
         id: c.id as string,
         name: c.name as string,
       }))}
+      sources={sources}
+      total={count ?? 0}
+      page={page}
+      pageSize={pageSize}
+      filters={{ q, companyId, status, level, source }}
     />
   );
 }

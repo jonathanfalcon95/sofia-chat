@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Select } from "@/components/ui/select";
+import { ListPagination } from "@/components/ui/list-pagination";
 import {
   Dialog,
   DialogContent,
@@ -31,10 +33,20 @@ type Inbox = {
 
 export function InboxesManager({
   inboxes,
+  companies,
   canSync,
+  total,
+  page,
+  pageSize,
+  filters,
 }: {
   inboxes: Inbox[];
+  companies: Array<{ id: string; name: string }>;
   canSync: boolean;
+  total: number;
+  page: number;
+  pageSize: number;
+  filters: { q: string; companyId: string; status: string };
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<Inbox | null>(null);
@@ -69,6 +81,45 @@ export function InboxesManager({
           ) : null
         }
       />
+
+      <form method="get" className="mb-4 grid gap-3 sm:grid-cols-4">
+        <input type="hidden" name="page" value="1" />
+        <input type="hidden" name="pageSize" value={String(pageSize)} />
+        <div className="space-y-1.5">
+          <Label>Buscar</Label>
+          <Input
+            name="q"
+            defaultValue={filters.q}
+            placeholder="Nombre o teléfono"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Empresa</Label>
+          <Select name="companyId" defaultValue={filters.companyId}>
+            <option value="">Todas</option>
+            <option value="none">Sin asignar</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Estado</Label>
+          <Select name="status" defaultValue={filters.status}>
+            <option value="all">Todos</option>
+            <option value="active">Activos</option>
+            <option value="inactive">Inactivos</option>
+          </Select>
+        </div>
+        <div className="flex items-end">
+          <Button type="submit" variant="secondary" className="w-full">
+            Filtrar
+          </Button>
+        </div>
+      </form>
+
       <Table>
         <THead>
           <TR>
@@ -107,6 +158,17 @@ export function InboxesManager({
           ))}
         </TBody>
       </Table>
+
+      <ListPagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        baseParams={{
+          q: filters.q || undefined,
+          companyId: filters.companyId || undefined,
+          status: filters.status !== "all" ? filters.status : undefined,
+        }}
+      />
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent>
