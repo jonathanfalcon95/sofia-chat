@@ -11,6 +11,8 @@ import {
 export type ConversationListFilters = {
   assignee?: AssigneeFilter;
   currentUserId?: string;
+  /** Specific agent profile; takes precedence over mine/unassigned */
+  assigneeId?: string;
   /** Free-text search over contact name / phone */
   phoneSearch?: string;
   contactTagId?: string;
@@ -106,7 +108,9 @@ export async function fetchConversationListPage(
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .limit(pageSize + 1);
 
-  if (filters.assignee === "mine" && filters.currentUserId) {
+  if (filters.assigneeId) {
+    query = query.eq("assignee_id", filters.assigneeId);
+  } else if (filters.assignee === "mine" && filters.currentUserId) {
     query = query.eq("assignee_id", filters.currentUserId);
   } else if (filters.assignee === "unassigned") {
     query = query.is("assignee_id", null);

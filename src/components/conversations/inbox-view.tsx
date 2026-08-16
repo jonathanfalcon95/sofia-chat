@@ -20,6 +20,7 @@ import {
   Info,
   Loader2,
   Search,
+  User,
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -163,6 +164,7 @@ export function InboxView({
   const [ticketPriority, setTicketPriority] =
     useState<TicketPriority>("medium");
   const [filterContactTagId, setFilterContactTagId] = useState("");
+  const [filterAgentId, setFilterAgentId] = useState("");
   const [phoneSearch, setPhoneSearch] = useState("");
   const [debouncedPhoneSearch, setDebouncedPhoneSearch] = useState("");
   const [assigneeFilter, setAssigneeFilter] =
@@ -187,6 +189,7 @@ export function InboxView({
     assigneeFilter,
     currentUserId,
     debouncedPhoneSearch,
+    filterAgentId,
     filterContactTagId,
   });
 
@@ -199,12 +202,14 @@ export function InboxView({
       assigneeFilter,
       currentUserId,
       debouncedPhoneSearch,
+      filterAgentId,
       filterContactTagId,
     };
   }, [
     assigneeFilter,
     currentUserId,
     debouncedPhoneSearch,
+    filterAgentId,
     filterContactTagId,
   ]);
 
@@ -254,6 +259,7 @@ export function InboxView({
   const listFilters = useMemo(
     () => ({
       assignee: assigneeFilter,
+      assigneeId: filterAgentId || undefined,
       currentUserId,
       phoneSearch: debouncedPhoneSearch,
       contactTagId: filterContactTagId || undefined,
@@ -263,6 +269,7 @@ export function InboxView({
       assigneeFilter,
       currentUserId,
       debouncedPhoneSearch,
+      filterAgentId,
       filterContactTagId,
     ],
   );
@@ -319,6 +326,7 @@ export function InboxView({
       try {
         const page = await fetchConversationListPage(supabase, {
           assignee: f.assigneeFilter,
+          assigneeId: f.filterAgentId || undefined,
           currentUserId: f.currentUserId,
           phoneSearch: f.debouncedPhoneSearch,
           contactTagId: f.filterContactTagId || undefined,
@@ -385,6 +393,7 @@ export function InboxView({
       const f = filtersRef.current;
       const page = await fetchConversationListPage(supabase, {
         assignee: f.assigneeFilter,
+        assigneeId: f.filterAgentId || undefined,
         currentUserId: f.currentUserId,
         phoneSearch: f.debouncedPhoneSearch,
         contactTagId: f.filterContactTagId || undefined,
@@ -1086,23 +1095,45 @@ export function InboxView({
                   {hasMoreConversations ? "+" : ""}
                 </Badge>
               </div>
-              {contactTags.length > 0 ? (
-                <label className="flex max-w-[45%] items-center gap-1.5 text-[var(--muted)]">
-                  <Filter className="h-3.5 w-3.5 shrink-0" />
-                  <select
-                    value={filterContactTagId}
-                    onChange={(e) => setFilterContactTagId(e.target.value)}
-                    className="h-11 min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-1 text-xs text-[var(--muted)] outline-none hover:border-[var(--line)] hover:bg-[var(--surface-2)] focus:border-[var(--line)] focus:bg-[var(--surface-2)]"
-                    aria-label="Filtrar por tag"
-                  >
-                    <option value="">Tags</option>
-                    {contactTags.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              {agents.length > 0 || contactTags.length > 0 ? (
+                <div className="flex min-w-0 max-w-[55%] items-center justify-end gap-1">
+                  {agents.length > 0 ? (
+                    <label className="flex min-w-0 items-center gap-1.5 text-[var(--muted)]">
+                      <User className="h-3.5 w-3.5 shrink-0" />
+                      <select
+                        value={filterAgentId}
+                        onChange={(e) => setFilterAgentId(e.target.value)}
+                        className="h-11 min-w-0 max-w-[7.5rem] truncate rounded-md border border-transparent bg-transparent px-1 text-xs text-[var(--muted)] outline-none hover:border-[var(--line)] hover:bg-[var(--surface-2)] focus:border-[var(--line)] focus:bg-[var(--surface-2)]"
+                        aria-label="Filtrar por agente"
+                      >
+                        <option value="">Agente</option>
+                        {agents.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.full_name || a.email}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  {contactTags.length > 0 ? (
+                    <label className="flex min-w-0 items-center gap-1.5 text-[var(--muted)]">
+                      <Filter className="h-3.5 w-3.5 shrink-0" />
+                      <select
+                        value={filterContactTagId}
+                        onChange={(e) => setFilterContactTagId(e.target.value)}
+                        className="h-11 min-w-0 max-w-[7.5rem] truncate rounded-md border border-transparent bg-transparent px-1 text-xs text-[var(--muted)] outline-none hover:border-[var(--line)] hover:bg-[var(--surface-2)] focus:border-[var(--line)] focus:bg-[var(--surface-2)]"
+                        aria-label="Filtrar por tag"
+                      >
+                        <option value="">Tags</option>
+                        {contactTags.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
               ) : null}
             </div>
             <div className="flex flex-wrap gap-1">
@@ -1116,9 +1147,12 @@ export function InboxView({
                 <button
                   key={opt.id}
                   type="button"
-                  onClick={() => setAssigneeFilter(opt.id)}
+                  onClick={() => {
+                    setFilterAgentId("");
+                    setAssigneeFilter(opt.id);
+                  }}
                   className={`min-h-9 rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
-                    assigneeFilter === opt.id
+                    !filterAgentId && assigneeFilter === opt.id
                       ? "bg-[var(--accent)] text-white"
                       : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--ink)]"
                   }`}
@@ -1147,8 +1181,29 @@ export function InboxView({
                 </button>
               ) : null}
             </div>
-            {filterContactTagId ? (
+            {filterAgentId || filterContactTagId ? (
               <div className="flex flex-wrap gap-1">
+                {agents
+                  .filter((a) => a.id === filterAgentId)
+                  .map((a) => {
+                    const color = assigneeColor(a.id);
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => setFilterAgentId("")}
+                        className="inline-flex min-h-9 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                        style={{
+                          background: `${color}22`,
+                          color,
+                          border: `1px solid ${color}55`,
+                        }}
+                        title="Quitar filtro de agente"
+                      >
+                        {a.full_name || a.email} ×
+                      </button>
+                    );
+                  })}
                 {contactTags
                   .filter((t) => t.id === filterContactTagId)
                   .map((t) => (
@@ -1171,15 +1226,20 @@ export function InboxView({
             ) : null}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto">
+          <div className="relative min-h-0 flex-1 overflow-hidden">
             {listRefreshing ? (
-              <div className="flex items-center justify-center gap-2 p-6 text-sm text-[var(--muted)]">
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[var(--surface)]/70 text-sm text-[var(--muted)]">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Filtrando…
               </div>
-            ) : conversations.length === 0 ? (
+            ) : null}
+            <div className="h-full overflow-auto">
+            {conversations.length === 0 ? (
               <div className="p-6 text-sm text-[var(--muted)]">
-                {phoneSearch.trim() || filterContactTagId || assigneeFilter !== "all"
+                {phoneSearch.trim() ||
+                filterContactTagId ||
+                filterAgentId ||
+                assigneeFilter !== "all"
                   ? "Ninguna conversación coincide con los filtros"
                   : "Sin conversaciones aún"}
               </div>
@@ -1323,6 +1383,7 @@ export function InboxView({
               ) : null}
               </>
             )}
+            </div>
           </div>
         </section>
 
