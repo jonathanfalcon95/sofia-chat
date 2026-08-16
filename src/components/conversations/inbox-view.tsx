@@ -54,7 +54,7 @@ import {
   type ThreadBootstrapPayload,
 } from "@/components/conversations/inbox-thread-context";
 import {
-  CONVERSATION_LIST_SELECT,
+  CONVERSATION_PAGE_SIZE,
   MESSAGE_PAGE_SIZE,
   MESSAGE_SELECT,
   type AssigneeFilter,
@@ -62,10 +62,12 @@ import {
   type MessageRow,
   type NoteRow,
 } from "@/lib/conversations/types";
+import { normalizeNotes } from "@/lib/conversations/normalize";
 import {
-  normalizeConversations,
-  normalizeNotes,
-} from "@/lib/conversations/normalize";
+  appendConversationListPage,
+  fetchConversationListPage,
+  mergeConversationListPage,
+} from "@/lib/conversations/fetch-conversation-list";
 import {
   durationSince,
   nowMs as perfNowMs,
@@ -100,6 +102,7 @@ function enrichMessages(rows: MessageRow[]) {
 
 export function InboxView({
   initialConversations,
+  initialHasMoreConversations = false,
   agents,
   tags,
   contactTags = [],
@@ -107,6 +110,7 @@ export function InboxView({
   children,
 }: {
   initialConversations: ConversationRow[];
+  initialHasMoreConversations?: boolean;
   agents: Array<{
     id: string;
     full_name: string | null;
@@ -134,6 +138,12 @@ export function InboxView({
   }, [pathname]);
 
   const [conversations, setConversations] = useState(initialConversations);
+  const [hasMoreConversations, setHasMoreConversations] = useState(
+    initialHasMoreConversations,
+  );
+  const [loadingMoreConversations, setLoadingMoreConversations] =
+    useState(false);
+  const [listRefreshing, setListRefreshing] = useState(false);
   const [isDesktop, setIsDesktop] = useState<boolean | null>(null);
   const [pendingRouteId, setPendingRouteId] = useState<string | null>(null);
   const activeId = pendingRouteId ?? routeId;
@@ -154,6 +164,7 @@ export function InboxView({
     useState<TicketPriority>("medium");
   const [filterContactTagId, setFilterContactTagId] = useState("");
   const [phoneSearch, setPhoneSearch] = useState("");
+  const [debouncedPhoneSearch, setDebouncedPhoneSearch] = useState("");
   const [assigneeFilter, setAssigneeFilter] =
     useState<AssigneeFilter>("all");
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
@@ -166,15 +177,43 @@ export function InboxView({
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const notesLoadingForIdRef = useRef<string | null>(null);
   const reloadDebounceRef = useRef<number | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const openStartByConversationRef = useRef<Map<string, number>>(new Map());
   const activeIdRef = useRef<string | null>(activeId);
   const threadCacheRef = useRef<
     Map<string, { messages: MessageRow[]; notes: NoteRow[]; hasMore: boolean }>
   >(new Map());
+  const filtersRef = useRef({
+    assigneeFilter,
+    currentUserId,
+    debouncedPhoneSearch,
+    filterContactTagId,
+  });
 
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+
+  useEffect(() => {
+    filtersRef.current = {
+      assigneeFilter,
+      currentUserId,
+      debouncedPhoneSearch,
+      filterContactTagId,
+    };
+  }, [
+    assigneeFilter,
+    currentUserId,
+    debouncedPhoneSearch,
+    filterContactTagId,
+  ]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedPhoneSearch(phoneSearch);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [phoneSearch]);
 
   useEffect(() => {
     setSofiaStoppedAll(readSofiaStoppedAll());
@@ -212,43 +251,21 @@ export function InboxView({
     return () => window.clearTimeout(timer);
   }, [routeId, pendingRouteId]);
 
-  const filteredConversations = useMemo(() => {
-    const query = phoneSearch.trim().toLowerCase();
-    const digits = phoneSearch.replace(/\D/g, "");
-
-    return conversations.filter((c) => {
-      if (
-        filterContactTagId &&
-        !c.contacts?.contact_tags?.some((t) => t.tag_id === filterContactTagId)
-      ) {
-        return false;
-      }
-      if (assigneeFilter === "mine") {
-        if (!(currentUserId && c.assignee_id === currentUserId)) return false;
-      } else if (assigneeFilter === "unassigned") {
-        if (c.assignee_id) return false;
-      }
-
-      if (query || digits) {
-        const name = (c.contacts?.name || "").toLowerCase();
-        const phone = c.contacts?.phone_number || "";
-        const phoneDigits = phone.replace(/\D/g, "");
-        const nameMatch = query ? name.includes(query) : false;
-        const phoneMatch = digits
-          ? phoneDigits.includes(digits) || phone.toLowerCase().includes(query)
-          : phone.toLowerCase().includes(query);
-        if (!nameMatch && !phoneMatch) return false;
-      }
-
-      return true;
-    });
-  }, [
-    conversations,
-    filterContactTagId,
-    assigneeFilter,
-    currentUserId,
-    phoneSearch,
-  ]);
+  const listFilters = useMemo(
+    () => ({
+      assignee: assigneeFilter,
+      currentUserId,
+      phoneSearch: debouncedPhoneSearch,
+      contactTagId: filterContactTagId || undefined,
+      pageSize: CONVERSATION_PAGE_SIZE,
+    }),
+    [
+      assigneeFilter,
+      currentUserId,
+      debouncedPhoneSearch,
+      filterContactTagId,
+    ],
+  );
 
   function resizeComposer() {
     const el = composerRef.current;
@@ -294,30 +311,112 @@ export function InboxView({
     router.replace(`/conversations/${firstId}`, { scroll: false });
   }, [routeId, pendingRouteId, isDesktop, initialConversations, router]);
 
-  const reloadConversations = useCallback(async () => {
-    const supabase = createClient();
-    const startedAt = perfNowMs();
-    const { data } = await supabase
-      .from("conversations")
-      .select(CONVERSATION_LIST_SELECT)
-      .order("last_message_at", { ascending: false, nullsFirst: false })
-      .limit(100);
-    setConversations(
-      normalizeConversations(data as Array<Record<string, unknown>> | null),
-    );
-    reportClientConversationMetric("conversation_list_reload", {
-      durationMs: durationSince(startedAt),
-      rows: data?.length ?? 0,
-    });
-  }, []);
+  const reloadConversations = useCallback(
+    async (mode: "merge" | "replace" = "merge") => {
+      const supabase = createClient();
+      const startedAt = perfNowMs();
+      const f = filtersRef.current;
+      try {
+        const page = await fetchConversationListPage(supabase, {
+          assignee: f.assigneeFilter,
+          currentUserId: f.currentUserId,
+          phoneSearch: f.debouncedPhoneSearch,
+          contactTagId: f.filterContactTagId || undefined,
+          pageSize: CONVERSATION_PAGE_SIZE,
+        });
+        setConversations((prev) =>
+          mode === "replace"
+            ? page.conversations
+            : mergeConversationListPage(prev, page.conversations),
+        );
+        setHasMoreConversations(page.hasMore);
+        reportClientConversationMetric("conversation_list_reload", {
+          durationMs: durationSince(startedAt),
+          rows: page.conversations.length,
+          mode,
+        });
+      } catch (err) {
+        console.error("Failed to reload conversations", err);
+      }
+    },
+    [],
+  );
 
   const queueReloadConversations = useCallback(() => {
     if (reloadDebounceRef.current) return;
     reloadDebounceRef.current = window.setTimeout(() => {
       reloadDebounceRef.current = null;
-      void reloadConversations();
+      void reloadConversations("merge");
     }, 300);
   }, [reloadConversations]);
+
+  // Server-side filters: replace list when assignee / tag / search change.
+  const filtersBootRef = useRef(true);
+  useEffect(() => {
+    if (filtersBootRef.current) {
+      filtersBootRef.current = false;
+      return;
+    }
+    let cancelled = false;
+    setListRefreshing(true);
+    void (async () => {
+      try {
+        await reloadConversations("replace");
+      } finally {
+        if (!cancelled) setListRefreshing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [listFilters, reloadConversations]);
+
+  const loadOlderConversations = useCallback(async () => {
+    if (loadingMoreConversations || !hasMoreConversations) return;
+    const last = conversations[conversations.length - 1];
+    const before = last?.last_message_at;
+    if (!before) {
+      setHasMoreConversations(false);
+      return;
+    }
+    setLoadingMoreConversations(true);
+    try {
+      const supabase = createClient();
+      const f = filtersRef.current;
+      const page = await fetchConversationListPage(supabase, {
+        assignee: f.assigneeFilter,
+        currentUserId: f.currentUserId,
+        phoneSearch: f.debouncedPhoneSearch,
+        contactTagId: f.filterContactTagId || undefined,
+        before,
+        pageSize: CONVERSATION_PAGE_SIZE,
+      });
+      setConversations((prev) =>
+        appendConversationListPage(prev, page.conversations),
+      );
+      setHasMoreConversations(page.hasMore);
+    } catch (err) {
+      console.error("Failed to load older conversations", err);
+      toast.error("No se pudieron cargar más conversaciones");
+    } finally {
+      setLoadingMoreConversations(false);
+    }
+  }, [conversations, hasMoreConversations, loadingMoreConversations]);
+
+  useEffect(() => {
+    const node = loadMoreSentinelRef.current;
+    if (!node || !hasMoreConversations) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          void loadOlderConversations();
+        }
+      },
+      { root: node.parentElement, rootMargin: "120px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMoreConversations, loadOlderConversations, conversations.length]);
 
   const markConversationRead = useCallback((conversationId: string) => {
     setConversations((prev) =>
@@ -982,7 +1081,10 @@ export function InboxView({
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
                 <h2 className="text-base font-bold">Conversaciones</h2>
-                <Badge>{filteredConversations.length}</Badge>
+                <Badge>
+                  {conversations.length}
+                  {hasMoreConversations ? "+" : ""}
+                </Badge>
               </div>
               {contactTags.length > 0 ? (
                 <label className="flex max-w-[45%] items-center gap-1.5 text-[var(--muted)]">
@@ -1070,14 +1172,20 @@ export function InboxView({
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto">
-            {filteredConversations.length === 0 ? (
+            {listRefreshing ? (
+              <div className="flex items-center justify-center gap-2 p-6 text-sm text-[var(--muted)]">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Filtrando…
+              </div>
+            ) : conversations.length === 0 ? (
               <div className="p-6 text-sm text-[var(--muted)]">
-                {phoneSearch.trim()
-                  ? "Ninguna conversación coincide con la búsqueda"
+                {phoneSearch.trim() || filterContactTagId || assigneeFilter !== "all"
+                  ? "Ninguna conversación coincide con los filtros"
                   : "Sin conversaciones aún"}
               </div>
             ) : (
-              filteredConversations.map((c) => {
+              <>
+              {conversations.map((c) => {
                 const contact = c.contacts;
                 const tag = c.conversation_tags?.[0]?.tags;
                 const assignee = c.assignee_id
@@ -1192,7 +1300,28 @@ export function InboxView({
                     </div>
                   </button>
                 );
-              })
+              })}
+              <div ref={loadMoreSentinelRef} className="h-1 w-full" aria-hidden />
+              {hasMoreConversations ? (
+                <div className="flex justify-center p-3">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    loading={loadingMoreConversations}
+                    onClick={() => void loadOlderConversations()}
+                  >
+                    {loadingMoreConversations
+                      ? "Cargando…"
+                      : "Cargar más conversaciones"}
+                  </Button>
+                </div>
+              ) : conversations.length > 0 ? (
+                <p className="px-4 py-3 text-center text-[11px] text-[var(--muted)]">
+                  No hay más conversaciones
+                </p>
+              ) : null}
+              </>
             )}
           </div>
         </section>

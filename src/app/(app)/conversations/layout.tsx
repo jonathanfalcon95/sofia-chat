@@ -15,6 +15,7 @@ export default async function ConversationsLayout({
   return (
     <InboxView
       initialConversations={data.conversations}
+      initialHasMoreConversations={data.hasMoreConversations}
       agents={data.agents}
       tags={data.tags}
       contactTags={data.contactTags}

@@ -1,27 +1,23 @@
 import { createClient } from "@/lib/supabase/server";
 import { listCompanyAgents } from "@/lib/agents";
-import { CONVERSATION_LIST_SELECT, MESSAGE_PAGE_SIZE, MESSAGE_SELECT } from "./types";
-import { normalizeConversations, normalizeNotes } from "./normalize";
+import { MESSAGE_PAGE_SIZE, MESSAGE_SELECT } from "./types";
+import { normalizeNotes } from "./normalize";
 import type { MessageRow } from "./types";
 import { nowMs, reportServerDuration } from "./perf";
+import { fetchConversationListPage } from "./fetch-conversation-list";
 
 export async function loadInboxListData() {
   const startedAt = nowMs();
   const supabase = await createClient();
   const conversationQueryStartedAt = nowMs();
-  const conversationQuery = supabase
-    .from("conversations")
-    .select(CONVERSATION_LIST_SELECT)
-    .order("last_message_at", { ascending: false, nullsFirst: false })
-    .limit(100);
 
   const [
-    { data: conversations },
+    listPage,
     agents,
     { data: tags },
     { data: contactTags },
   ] = await Promise.all([
-    conversationQuery,
+    fetchConversationListPage(supabase),
     listCompanyAgents(),
     supabase
       .from("tags")
@@ -36,18 +32,18 @@ export async function loadInboxListData() {
   ]);
 
   reportServerDuration("list_query", conversationQueryStartedAt, {
-    rows: conversations?.length ?? 0,
+    rows: listPage.conversations.length,
+    hasMore: listPage.hasMore,
   });
   reportServerDuration("list_bootstrap_total", startedAt, {
-    conversations: conversations?.length ?? 0,
+    conversations: listPage.conversations.length,
     agents: agents.length,
     tags: (tags?.length ?? 0) + (contactTags?.length ?? 0),
   });
 
   return {
-    conversations: normalizeConversations(
-      conversations as Array<Record<string, unknown>> | null,
-    ),
+    conversations: listPage.conversations,
+    hasMoreConversations: listPage.hasMore,
     agents,
     tags: tags ?? [],
     contactTags: contactTags ?? [],

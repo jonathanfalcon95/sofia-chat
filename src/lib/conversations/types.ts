@@ -63,6 +63,8 @@ export type NoteRow = {
 export type AssigneeFilter = "all" | "mine" | "unassigned";
 
 export const MESSAGE_PAGE_SIZE = 25;
+/** Initial + incremental page size for the inbox conversation list. */
+export const CONVERSATION_PAGE_SIZE = 50;
 
 export const MESSAGE_SELECT =
   "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename, ycloud_message_id, wamid, reply_to_wamid, reactions";
