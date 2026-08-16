@@ -1,17 +1,26 @@
 const YCLOUD_BASE = "https://api.ycloud.com/v2";
 
-function apiKey() {
-  const key = process.env.YCLOUD_API_KEY;
-  if (!key) throw new Error("YCLOUD_API_KEY no configurada");
+export const YCLOUD_WHATSAPP_WEBHOOK_EVENTS = [
+  "whatsapp.inbound_message.received",
+  "whatsapp.message.updated",
+] as const;
+
+function resolveApiKey(explicit?: string) {
+  const key = explicit?.trim() || process.env.YCLOUD_API_KEY?.trim();
+  if (!key) throw new Error("YCloud API key no configurada");
   return key;
 }
 
-async function ycloudFetch<T>(path: string, init?: RequestInit): Promise<T> {
+async function ycloudFetch<T>(
+  path: string,
+  init: RequestInit | undefined,
+  apiKey?: string,
+): Promise<T> {
   const res = await fetch(`${YCLOUD_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": apiKey(),
+      "X-API-Key": resolveApiKey(apiKey),
       ...(init?.headers ?? {}),
     },
   });
@@ -36,6 +45,7 @@ async function ycloudFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type SendTextParams = {
+  apiKey: string;
   from: string;
   to: string;
   text: string;
@@ -44,6 +54,7 @@ export type SendTextParams = {
 };
 
 export type SendTemplateParams = {
+  apiKey: string;
   from: string;
   to: string;
   template: {
@@ -63,25 +74,34 @@ export async function sendWhatsAppText(params: SendTextParams) {
   if (params.replyToWamid) {
     payload.context = { message_id: params.replyToWamid };
   }
-  return ycloudFetch<Record<string, unknown>>("/whatsapp/messages", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return ycloudFetch<Record<string, unknown>>(
+    "/whatsapp/messages",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    params.apiKey,
+  );
 }
 
 export async function sendWhatsAppTemplate(params: SendTemplateParams) {
-  return ycloudFetch<Record<string, unknown>>("/whatsapp/messages", {
-    method: "POST",
-    body: JSON.stringify({
-      from: params.from,
-      to: params.to,
-      type: "template",
-      template: params.template,
-    }),
-  });
+  return ycloudFetch<Record<string, unknown>>(
+    "/whatsapp/messages",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        from: params.from,
+        to: params.to,
+        type: "template",
+        template: params.template,
+      }),
+    },
+    params.apiKey,
+  );
 }
 
 export async function uploadWhatsAppMedia(params: {
+  apiKey: string;
   phoneNumber: string;
   file: Blob;
   filename: string;
@@ -98,7 +118,7 @@ export async function uploadWhatsAppMedia(params: {
   const res = await fetch(`${YCLOUD_BASE}/whatsapp/media/${phone}/upload`, {
     method: "POST",
     headers: {
-      "X-API-Key": apiKey(),
+      "X-API-Key": resolveApiKey(params.apiKey),
     },
     body: form,
   });
@@ -128,6 +148,7 @@ export async function uploadWhatsAppMedia(params: {
 }
 
 export async function sendWhatsAppMedia(params: {
+  apiKey: string;
   from: string;
   to: string;
   type: "image" | "audio" | "document";
@@ -154,38 +175,50 @@ export async function sendWhatsAppMedia(params: {
     payload.context = { message_id: params.replyToWamid };
   }
 
-  return ycloudFetch<Record<string, unknown>>("/whatsapp/messages", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return ycloudFetch<Record<string, unknown>>(
+    "/whatsapp/messages",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    params.apiKey,
+  );
 }
 
 export async function sendWhatsAppReaction(params: {
+  apiKey: string;
   from: string;
   to: string;
   messageId: string;
   emoji: string;
 }) {
-  return ycloudFetch<Record<string, unknown>>("/whatsapp/messages/sendDirectly", {
-    method: "POST",
-    body: JSON.stringify({
-      from: params.from,
-      to: params.to,
-      type: "reaction",
-      reaction: {
-        message_id: params.messageId,
-        emoji: params.emoji,
-      },
-    }),
-  });
+  return ycloudFetch<Record<string, unknown>>(
+    "/whatsapp/messages/sendDirectly",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        from: params.from,
+        to: params.to,
+        type: "reaction",
+        reaction: {
+          message_id: params.messageId,
+          emoji: params.emoji,
+        },
+      }),
+    },
+    params.apiKey,
+  );
 }
 
-export async function downloadYCloudMedia(url: string): Promise<Response> {
+export async function downloadYCloudMedia(
+  url: string,
+  apiKey: string,
+): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
   try {
     const res = await fetch(url, {
-      headers: { "X-API-Key": apiKey() },
+      headers: { "X-API-Key": resolveApiKey(apiKey) },
       signal: controller.signal,
     });
     return res;
@@ -194,18 +227,21 @@ export async function downloadYCloudMedia(url: string): Promise<Response> {
   }
 }
 
-export async function listWhatsAppTemplates(params?: {
+export async function listWhatsAppTemplates(params: {
+  apiKey: string;
   page?: number;
   limit?: number;
   wabaId?: string;
 }) {
   const search = new URLSearchParams();
-  if (params?.page) search.set("page", String(params.page));
-  if (params?.limit) search.set("limit", String(params.limit));
-  if (params?.wabaId) search.set("filter.wabaId", params.wabaId);
+  if (params.page) search.set("page", String(params.page));
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.wabaId) search.set("filter.wabaId", params.wabaId);
   const qs = search.toString();
   return ycloudFetch<{ items?: unknown[]; data?: unknown[] }>(
     `/whatsapp/templates${qs ? `?${qs}` : ""}`,
+    undefined,
+    params.apiKey,
   );
 }
 
@@ -228,19 +264,89 @@ export type YCloudPhoneNumberPage = {
   total?: number;
 };
 
-export async function listWhatsAppPhoneNumbers(params?: {
+export async function listWhatsAppPhoneNumbers(params: {
+  apiKey: string;
   page?: number;
   limit?: number;
   includeTotal?: boolean;
   wabaId?: string;
 }) {
   const search = new URLSearchParams();
-  if (params?.page) search.set("page", String(params.page));
-  if (params?.limit) search.set("limit", String(params.limit));
-  if (params?.includeTotal) search.set("includeTotal", "true");
-  if (params?.wabaId) search.set("filter.wabaId", params.wabaId);
+  if (params.page) search.set("page", String(params.page));
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.includeTotal) search.set("includeTotal", "true");
+  if (params.wabaId) search.set("filter.wabaId", params.wabaId);
   const qs = search.toString();
   return ycloudFetch<YCloudPhoneNumberPage>(
     `/whatsapp/phoneNumbers${qs ? `?${qs}` : ""}`,
+    undefined,
+    params.apiKey,
+  );
+}
+
+export type YCloudWebhookEndpoint = {
+  id: string;
+  url?: string;
+  enabledEvents?: string[];
+  status?: string;
+  secret?: string;
+  description?: string;
+};
+
+function webhookItems(data: unknown): YCloudWebhookEndpoint[] {
+  if (Array.isArray(data)) return data as YCloudWebhookEndpoint[];
+  if (data && typeof data === "object") {
+    const rec = data as { items?: YCloudWebhookEndpoint[]; data?: YCloudWebhookEndpoint[] };
+    return rec.items ?? rec.data ?? [];
+  }
+  return [];
+}
+
+export async function listWebhookEndpoints(apiKey: string) {
+  const data = await ycloudFetch<unknown>("/webhookEndpoints", undefined, apiKey);
+  return webhookItems(data);
+}
+
+export async function createWebhookEndpoint(
+  apiKey: string,
+  body: {
+    url: string;
+    description?: string;
+    enabledEvents: string[];
+    status?: "active" | "disabled";
+  },
+) {
+  return ycloudFetch<YCloudWebhookEndpoint>(
+    "/webhookEndpoints",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        url: body.url,
+        description: body.description,
+        enabledEvents: body.enabledEvents,
+        status: body.status ?? "active",
+      }),
+    },
+    apiKey,
+  );
+}
+
+export async function updateWebhookEndpoint(
+  apiKey: string,
+  endpointId: string,
+  body: {
+    url?: string;
+    description?: string;
+    enabledEvents?: string[];
+    status?: "active" | "disabled";
+  },
+) {
+  return ycloudFetch<YCloudWebhookEndpoint>(
+    `/webhookEndpoints/${encodeURIComponent(endpointId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+    apiKey,
   );
 }

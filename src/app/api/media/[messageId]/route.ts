@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { downloadYCloudMedia } from "@/lib/ycloud/client";
+import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@/lib/media";
 
 export const runtime = "nodejs";
@@ -33,7 +34,7 @@ export async function GET(
 
   const { data: message, error } = await supabase
     .from("messages")
-    .select("id, media_url, media_mime, type, body, media_filename")
+    .select("id, media_url, media_mime, type, body, media_filename, conversation_id")
     .eq("id", messageId)
     .maybeSingle();
 
@@ -89,7 +90,16 @@ export async function GET(
       });
     }
 
-    const upstream = await downloadYCloudMedia(message.media_url);
+    const { data: conversation, error: convError } = await supabase
+      .from("conversations")
+      .select("inbox_id")
+      .eq("id", message.conversation_id)
+      .maybeSingle();
+    if (convError || !conversation?.inbox_id) {
+      return NextResponse.json({ error: "inbox_not_found" }, { status: 404 });
+    }
+    const creds = await getInboxYCloudCredentials(conversation.inbox_id as string);
+    const upstream = await downloadYCloudMedia(message.media_url, creds.apiKey);
     if (!upstream.ok) {
       return NextResponse.json(
         { error: `ycloud_${upstream.status}` },

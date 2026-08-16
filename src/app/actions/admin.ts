@@ -4,15 +4,13 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession, sessionHasPermission } from "@/lib/rbac/session";
 import {
-  listWhatsAppPhoneNumbers,
-  type YCloudPhoneNumber,
-} from "@/lib/ycloud/client";
-
-function normalizeE164(phone: string) {
-  const trimmed = phone.trim();
-  if (!trimmed) return "";
-  return trimmed.startsWith("+") ? trimmed : `+${trimmed}`;
-}
+  ensureYCloudWebhook,
+  listYCloudAccountsPublic,
+  seedYCloudAccountsFromEnv,
+  syncYCloudPhoneNumbers,
+  upsertYCloudAccount,
+  type YCloudAccountPublic,
+} from "@/lib/ycloud/accounts";
 
 async function assignCompanyInboxes(companyId: string, inboxIds: string[]) {
   const { createAdminClient, hasServiceRole } = await import(
@@ -184,104 +182,48 @@ export async function updateCompany(input: {
   revalidatePath("/settings/users");
 }
 
-export async function syncYCloudInboxes() {
+export async function listYCloudAccounts(): Promise<YCloudAccountPublic[]> {
   const session = await getAppSession();
   if (!session?.isPlatformAdmin) throw new Error("forbidden");
+  await seedYCloudAccountsFromEnv();
+  return listYCloudAccountsPublic();
+}
 
-  const { createAdminClient, hasServiceRole } = await import(
-    "@/lib/supabase/admin"
-  );
-  if (!hasServiceRole()) {
+export async function saveYCloudAccount(input: {
+  id?: string;
+  name: string;
+  apiKey?: string;
+  webhookSecret?: string;
+  isActive?: boolean;
+}) {
+  const session = await getAppSession();
+  if (!session?.isPlatformAdmin) throw new Error("forbidden");
+  const row = await upsertYCloudAccount(input);
+  const webhook = await ensureYCloudWebhook(row.id);
+  revalidatePath("/inboxes");
+  return { account: (await listYCloudAccountsPublic()).find((a) => a.id === row.id)!, webhook };
+}
+
+export async function registerYCloudWebhook(accountId: string) {
+  const session = await getAppSession();
+  if (!session?.isPlatformAdmin) throw new Error("forbidden");
+  const webhook = await ensureYCloudWebhook(accountId);
+  revalidatePath("/inboxes");
+  return webhook;
+}
+
+export async function syncYCloudInboxes(accountId: string) {
+  const session = await getAppSession();
+  if (!session?.isPlatformAdmin) throw new Error("forbidden");
+  if (!accountId) throw new Error("Selecciona una cuenta YCloud");
+  if (!(await import("@/lib/supabase/admin")).hasServiceRole()) {
     throw new Error("SUPABASE_SERVICE_ROLE_KEY no configurada");
   }
-  const db = createAdminClient();
 
-  const remote: YCloudPhoneNumber[] = [];
-  let page = 1;
-  for (;;) {
-    const res = await listWhatsAppPhoneNumbers({
-      page,
-      limit: 100,
-      includeTotal: true,
-    });
-    const items = res.items ?? res.data ?? [];
-    remote.push(...items);
-    if (items.length < 100) break;
-    page += 1;
-    if (page > 50) break;
-  }
-
-  const { data: existing, error: existingError } = await db
-    .from("inboxes")
-    .select("id, phone_number, ycloud_phone_number_id, name, waba_id");
-  if (existingError) throw new Error(existingError.message);
-
-  const byYCloudId = new Map<string, (typeof existing)[number]>();
-  const byPhone = new Map<string, (typeof existing)[number]>();
-  for (const row of existing ?? []) {
-    if (row.ycloud_phone_number_id) {
-      byYCloudId.set(row.ycloud_phone_number_id, row);
-    }
-    byPhone.set(normalizeE164(row.phone_number), row);
-  }
-
-  let created = 0;
-  let updated = 0;
-
-  for (const item of remote) {
-    const ycloudId = item.id?.trim();
-    const rawPhone = item.phoneNumber || item.displayPhoneNumber || "";
-    const phone = normalizeE164(rawPhone.replace(/[^\d+]/g, ""));
-    if (!ycloudId || !phone) continue;
-
-    const name =
-      item.verifiedName?.trim() ||
-      item.newName?.trim() ||
-      item.displayPhoneNumber?.trim() ||
-      phone;
-    const wabaId = item.wabaId?.trim() || null;
-
-    const match =
-      byYCloudId.get(ycloudId) ?? byPhone.get(phone) ?? null;
-
-    if (!match) {
-      const { data: inserted, error } = await db
-        .from("inboxes")
-        .insert({
-          company_id: null,
-          name,
-          phone_number: phone,
-          ycloud_phone_number_id: ycloudId,
-          waba_id: wabaId,
-          is_active: true,
-        })
-        .select("id, phone_number, ycloud_phone_number_id, name, waba_id")
-        .single();
-      if (error) throw new Error(error.message);
-      if (inserted) {
-        byYCloudId.set(ycloudId, inserted);
-        byPhone.set(phone, inserted);
-      }
-      created += 1;
-      continue;
-    }
-
-    const { error } = await db
-      .from("inboxes")
-      .update({
-        name,
-        phone_number: phone,
-        ycloud_phone_number_id: ycloudId,
-        waba_id: wabaId,
-      })
-      .eq("id", match.id);
-    if (error) throw new Error(error.message);
-    updated += 1;
-  }
-
+  const result = await syncYCloudPhoneNumbers(accountId);
   revalidatePath("/inboxes");
   revalidatePath("/companies");
-  return { created, updated, total: remote.length };
+  return result;
 }
 
 export async function updateInbox(input: {

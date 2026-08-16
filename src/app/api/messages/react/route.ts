@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendWhatsAppReaction } from "@/lib/ycloud/client";
+import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { isWithinCustomerWindow } from "@/lib/utils";
 import {
   getAppSession,
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
     .from("conversations")
     .select(
       `
-      id, company_id, window_expires_at,
+      id, company_id, window_expires_at, inbox_id,
       inboxes ( phone_number ),
       contacts ( phone_number )
     `,
@@ -75,6 +76,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing_phones" }, { status: 400 });
   }
 
+  let ycloudApiKey: string;
+  try {
+    const creds = await getInboxYCloudCredentials(conversation.inbox_id as string);
+    ycloudApiKey = creds.apiKey;
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "ycloud_account_missing" },
+      { status: 400 },
+    );
+  }
+
   const admin = createAdminClient();
   const { data: target, error: targetError } = await admin
     .from("messages")
@@ -106,6 +118,7 @@ export async function POST(request: Request) {
 
   try {
     await sendWhatsAppReaction({
+      apiKey: ycloudApiKey,
       from: inbox.phone_number,
       to: contact.phone_number,
       messageId: targetWamid,

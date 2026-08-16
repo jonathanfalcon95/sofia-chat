@@ -5,6 +5,7 @@ import {
   sendWhatsAppMedia,
   uploadWhatsAppMedia,
 } from "@/lib/ycloud/client";
+import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { isWithinCustomerWindow } from "@/lib/utils";
 import {
   getAppSession,
@@ -127,6 +128,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing_phones" }, { status: 400 });
   }
 
+  let ycloudApiKey: string;
+  try {
+    const creds = await getInboxYCloudCredentials(conversation.inbox_id as string);
+    ycloudApiKey = creds.apiKey;
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "ycloud_account_missing" },
+      { status: 400 },
+    );
+  }
+
   const waType = KIND_TO_WA[kind as "image" | "audio" | "document"];
   const mime = mimeRaw || "application/octet-stream";
   const filename = file.name || `file.${mime.split("/")[1] || "bin"}`;
@@ -134,6 +146,7 @@ export async function POST(request: Request) {
 
   try {
     const uploaded = await uploadWhatsAppMedia({
+      apiKey: ycloudApiKey,
       phoneNumber: inbox.phone_number,
       file,
       filename,
@@ -141,6 +154,7 @@ export async function POST(request: Request) {
     });
 
     const ycloudRes = await sendWhatsAppMedia({
+      apiKey: ycloudApiKey,
       from: inbox.phone_number,
       to: contact.phone_number,
       type: waType,

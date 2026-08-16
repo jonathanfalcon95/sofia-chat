@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendWhatsAppText, sendWhatsAppTemplate } from "@/lib/ycloud/client";
+import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { isWithinCustomerWindow } from "@/lib/utils";
 import {
   getAppSession,
@@ -63,6 +64,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing_phones" }, { status: 400 });
   }
 
+  let ycloudApiKey: string;
+  try {
+    const creds = await getInboxYCloudCredentials(conversation.inbox_id as string);
+    ycloudApiKey = creds.apiKey;
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "ycloud_account_missing" },
+      { status: 400 },
+    );
+  }
+
   // Persist with service role after authz checks so a successful YCloud send
   // cannot be orphaned by messages INSERT RLS.
   const admin = createAdminClient();
@@ -87,6 +99,7 @@ export async function POST(request: Request) {
       const replyToWamid = String(body.replyToWamid ?? "").trim() || undefined;
 
       const ycloudRes = await sendWhatsAppText({
+        apiKey: ycloudApiKey,
         from: inbox.phone_number,
         to: contact.phone_number,
         text,
@@ -163,6 +176,7 @@ export async function POST(request: Request) {
     }
 
     const ycloudRes = await sendWhatsAppTemplate({
+      apiKey: ycloudApiKey,
       from: inbox.phone_number,
       to: contact.phone_number,
       template: {
