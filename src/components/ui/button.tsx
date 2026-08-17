@@ -57,11 +57,17 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
-        disabled={disabled || loading}
+        disabled={asChild ? undefined : disabled || loading}
         {...props}
       >
-        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        {children}
+        {asChild ? (
+          children
+        ) : (
+          <>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {children}
+          </>
+        )}
       </Comp>
     );
   },
