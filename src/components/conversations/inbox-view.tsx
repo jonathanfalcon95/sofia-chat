@@ -16,10 +16,12 @@ import { es } from "date-fns/locale";
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  ChevronDown,
   Filter,
   Info,
   Loader2,
   Search,
+  Tag,
   User,
   X,
 } from "lucide-react";
@@ -1086,103 +1088,161 @@ export function InboxView({
       <div>
       <div className={`chat-layout chat-mobile-${mobileView}`}>
         <section className="chat-pane chat-pane-list">
-          <div className="space-y-2 border-b border-[var(--line)] p-3">
+          <div className="space-y-3 border-b border-[var(--line)] p-3.5 bg-[var(--surface)]">
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
-                <h2 className="text-base font-bold">Conversaciones</h2>
-                <Badge>
+                <h2 className="text-base font-bold tracking-tight text-[var(--ink)]">
+                  Conversaciones
+                </h2>
+                <Badge className="px-2 py-0.5 text-xs font-semibold">
                   {conversations.length}
                   {hasMoreConversations ? "+" : ""}
                 </Badge>
               </div>
-              {agents.length > 0 || contactTags.length > 0 ? (
-                <div className="flex min-w-0 max-w-[55%] items-center justify-end gap-1">
-                  {agents.length > 0 ? (
-                    <label className="flex min-w-0 items-center gap-1.5 text-[var(--muted)]">
-                      <User className="h-3.5 w-3.5 shrink-0" />
-                      <select
-                        value={filterAgentId}
-                        onChange={(e) => setFilterAgentId(e.target.value)}
-                        className="h-11 min-w-0 max-w-[7.5rem] truncate rounded-md border border-transparent bg-transparent px-1 text-xs text-[var(--muted)] outline-none hover:border-[var(--line)] hover:bg-[var(--surface-2)] focus:border-[var(--line)] focus:bg-[var(--surface-2)]"
-                        aria-label="Filtrar por agente"
-                      >
-                        <option value="">Agente</option>
-                        {agents.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.full_name || a.email}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  {contactTags.length > 0 ? (
-                    <label className="flex min-w-0 items-center gap-1.5 text-[var(--muted)]">
-                      <Filter className="h-3.5 w-3.5 shrink-0" />
-                      <select
-                        value={filterContactTagId}
-                        onChange={(e) => setFilterContactTagId(e.target.value)}
-                        className="h-11 min-w-0 max-w-[7.5rem] truncate rounded-md border border-transparent bg-transparent px-1 text-xs text-[var(--muted)] outline-none hover:border-[var(--line)] hover:bg-[var(--surface-2)] focus:border-[var(--line)] focus:bg-[var(--surface-2)]"
-                        aria-label="Filtrar por tag"
-                      >
-                        <option value="">Tags</option>
-                        {contactTags.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {(
-                [
-                  { id: "all", label: "Todas" },
-                  { id: "mine", label: "Mías" },
-                  { id: "unassigned", label: "Sin asignar" },
-                ] as const
-              ).map((opt) => (
+              {filterAgentId || filterContactTagId || assigneeFilter !== "all" || phoneSearch ? (
                 <button
-                  key={opt.id}
                   type="button"
                   onClick={() => {
                     setFilterAgentId("");
-                    setAssigneeFilter(opt.id);
+                    setFilterContactTagId("");
+                    setAssigneeFilter("all");
+                    setPhoneSearch("");
                   }}
-                  className={`min-h-9 rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
-                    !filterAgentId && assigneeFilter === opt.id
-                      ? "bg-[var(--accent)] text-white"
-                      : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--ink)]"
-                  }`}
+                  className="text-[11px] font-medium text-[var(--muted)] hover:text-[var(--danger)] transition-colors"
                 >
-                  {opt.label}
+                  Limpiar todo
                 </button>
-              ))}
+              ) : null}
             </div>
+
             <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" />
               <Input
                 value={phoneSearch}
                 onChange={(e) => setPhoneSearch(e.target.value)}
                 placeholder="Buscar por teléfono o nombre..."
-                className="min-h-11 pl-8 pr-8"
+                className="h-9 min-h-[36px] pl-8.5 pr-8 text-xs bg-[var(--surface-2)] border-transparent hover:border-[var(--line)] focus:border-[var(--accent)] focus:bg-[var(--surface)] transition-all rounded-lg"
                 aria-label="Buscar conversaciones"
               />
               {phoneSearch ? (
                 <button
                   type="button"
                   onClick={() => setPhoneSearch("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-[var(--muted)] hover:text-[var(--ink)]"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--muted)] hover:text-[var(--ink)]"
                   aria-label="Limpiar búsqueda"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               ) : null}
             </div>
+
+            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--surface-2)] border border-[var(--line)]/60">
+              {(
+                [
+                  { id: "all", label: "Todas" },
+                  { id: "mine", label: "Mías" },
+                  { id: "unassigned", label: "Sin asignar" },
+                ] as const
+              ).map((opt) => {
+                const isSelected = !filterAgentId && assigneeFilter === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      setFilterAgentId("");
+                      setAssigneeFilter(opt.id);
+                    }}
+                    className={cn(
+                      "flex-1 py-1.5 px-2 text-xs font-medium rounded-md transition-all text-center truncate cursor-pointer",
+                      isSelected
+                        ? "bg-[var(--surface)] text-[var(--ink)] shadow-xs font-semibold"
+                        : "text-[var(--muted)] hover:text-[var(--ink)] hover:bg-[var(--surface)]/50"
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {agents.length > 0 || contactTags.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2 pt-0.5">
+                {agents.length > 0 ? (
+                  <div className="relative min-w-0">
+                    <label className="sr-only">Filtrar por agente</label>
+                    <div className="relative flex items-center">
+                      <User className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 shrink-0 text-[var(--muted)] z-10" />
+                      <select
+                        value={filterAgentId}
+                        onChange={(e) => setFilterAgentId(e.target.value)}
+                        className={cn(
+                          "h-8 w-full appearance-none rounded-lg border pl-8 pr-7 text-xs font-medium transition-all outline-none cursor-pointer truncate",
+                          filterAgentId
+                            ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] font-semibold"
+                            : "border-[var(--line)] bg-[var(--surface-2)] text-[var(--muted)] hover:border-[var(--line)] hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+                        )}
+                        aria-label="Filtrar por agente"
+                      >
+                        <option value="" className="text-[var(--ink)] bg-[var(--surface)]">
+                          Agentes: Todos
+                        </option>
+                        {agents.map((a) => (
+                          <option
+                            key={a.id}
+                            value={a.id}
+                            className="text-[var(--ink)] bg-[var(--surface)]"
+                          >
+                            {a.full_name || a.email}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                    </div>
+                  </div>
+                ) : null}
+
+                {contactTags.length > 0 ? (
+                  <div className="relative min-w-0">
+                    <label className="sr-only">Filtrar por tag</label>
+                    <div className="relative flex items-center">
+                      <Tag className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 shrink-0 text-[var(--muted)] z-10" />
+                      <select
+                        value={filterContactTagId}
+                        onChange={(e) => setFilterContactTagId(e.target.value)}
+                        className={cn(
+                          "h-8 w-full appearance-none rounded-lg border pl-8 pr-7 text-xs font-medium transition-all outline-none cursor-pointer truncate",
+                          filterContactTagId
+                            ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] font-semibold"
+                            : "border-[var(--line)] bg-[var(--surface-2)] text-[var(--muted)] hover:border-[var(--line)] hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+                        )}
+                        aria-label="Filtrar por tag"
+                      >
+                        <option value="" className="text-[var(--ink)] bg-[var(--surface)]">
+                          Tags: Todos
+                        </option>
+                        {contactTags.map((t) => (
+                          <option
+                            key={t.id}
+                            value={t.id}
+                            className="text-[var(--ink)] bg-[var(--surface)]"
+                          >
+                            {t.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {filterAgentId || filterContactTagId ? (
-              <div className="flex flex-wrap gap-1">
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider">
+                  Activos:
+                </span>
                 {agents
                   .filter((a) => a.id === filterAgentId)
                   .map((a) => {
@@ -1192,15 +1252,17 @@ export function InboxView({
                         key={a.id}
                         type="button"
                         onClick={() => setFilterAgentId("")}
-                        className="inline-flex min-h-9 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all hover:opacity-80 cursor-pointer"
                         style={{
-                          background: `${color}22`,
+                          background: `${color}18`,
                           color,
-                          border: `1px solid ${color}55`,
+                          border: `1px solid ${color}44`,
                         }}
                         title="Quitar filtro de agente"
                       >
-                        {a.full_name || a.email} ×
+                        <User className="h-3 w-3 shrink-0" />
+                        <span className="truncate max-w-[110px]">{a.full_name || a.email}</span>
+                        <X className="h-3 w-3 shrink-0 ml-0.5 opacity-70 hover:opacity-100" />
                       </button>
                     );
                   })}
@@ -1211,15 +1273,20 @@ export function InboxView({
                       key={t.id}
                       type="button"
                       onClick={() => setFilterContactTagId("")}
-                      className="inline-flex min-h-9 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all hover:opacity-80 cursor-pointer"
                       style={{
-                        background: `${t.color}22`,
+                        background: `${t.color}18`,
                         color: t.color,
-                        border: `1px solid ${t.color}55`,
+                        border: `1px solid ${t.color}44`,
                       }}
-                      title="Quitar filtro"
+                      title="Quitar filtro de tag"
                     >
-                      {t.name} ×
+                      <span
+                        className="h-2 w-2 rounded-full shrink-0"
+                        style={{ backgroundColor: t.color }}
+                      />
+                      <span className="truncate max-w-[110px]">{t.name}</span>
+                      <X className="h-3 w-3 shrink-0 ml-0.5 opacity-70 hover:opacity-100" />
                     </button>
                   ))}
               </div>

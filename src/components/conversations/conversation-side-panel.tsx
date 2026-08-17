@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Loader2, Ticket, Trash2 } from "lucide-react";
+import { Loader2, Tag, Ticket, Trash2, User } from "lucide-react";
 import {
   addConversationNote,
   assignConversation,
@@ -186,7 +186,10 @@ export function ConversationSidePanel({
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <Label>Asignar agente</Label>
+        <Label className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--ink)]">
+          <User className="h-3.5 w-3.5 text-[var(--muted)]" />
+          Asignar agente
+        </Label>
         <Select
           value={active.assignee_id ?? ""}
           onChange={(e) =>
@@ -220,7 +223,8 @@ export function ConversationSidePanel({
       </div>
 
       <div className="space-y-2">
-        <Label className="inline-flex items-center gap-2">
+        <Label className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--ink)]">
+          <Tag className="h-3.5 w-3.5 text-[var(--muted)]" />
           Etiqueta / Kanban
           {savingKanbanTag ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--accent)]" />
@@ -244,8 +248,11 @@ export function ConversationSidePanel({
 
       {active.contacts?.id ? (
         <div className="space-y-2">
-          <Label>Tags del contacto</Label>
-          <div className="space-y-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] p-2">
+          <Label className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--ink)]">
+            <Tag className="h-3.5 w-3.5 text-[var(--muted)]" />
+            Tags del contacto
+          </Label>
+          <div className="space-y-1 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 p-2">
             {contactTags
               .filter((t) => t.company_id === active.company_id)
               .map((t) => {
@@ -256,17 +263,26 @@ export function ConversationSidePanel({
                 return (
                   <label
                     key={t.id}
-                    className={`flex min-h-11 items-center gap-2 text-sm ${
-                      busy ? "cursor-wait opacity-70" : "cursor-pointer"
-                    }`}
+                    className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
+                      checked
+                        ? "bg-[var(--surface)] text-[var(--ink)] shadow-xs"
+                        : "text-[var(--muted)] hover:bg-[var(--surface)]/50 hover:text-[var(--ink)]"
+                    } ${busy ? "cursor-wait opacity-70" : "cursor-pointer"}`}
                   >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full shrink-0"
+                        style={{ background: t.color }}
+                      />
+                      <span className="truncate font-medium">{t.name}</span>
+                    </div>
                     <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
                       {busy ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--accent)]" />
                       ) : (
                         <input
                           type="checkbox"
-                          className="h-3.5 w-3.5"
+                          className="h-3.5 w-3.5 rounded accent-[var(--accent)] cursor-pointer"
                           checked={checked}
                           disabled={Boolean(savingTagId)}
                           onChange={(e) => {
@@ -336,17 +352,12 @@ export function ConversationSidePanel({
                         />
                       )}
                     </span>
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ background: t.color }}
-                    />
-                    {t.name}
                   </label>
                 );
               })}
             {contactTags.filter((t) => t.company_id === active.company_id)
               .length === 0 ? (
-              <p className="text-xs text-[var(--muted)]">
+              <p className="p-1 text-xs text-[var(--muted)]">
                 No hay tags. Créalos en Contactos.
               </p>
             ) : null}
