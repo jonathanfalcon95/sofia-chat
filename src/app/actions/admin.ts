@@ -4,6 +4,11 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession, sessionHasPermission } from "@/lib/rbac/session";
 import {
+  isPlatformPermission,
+  isReservedRoleName,
+  sanitizeRolePermissionCodes,
+} from "@/lib/rbac/permissions";
+import {
   ensureYCloudWebhook,
   listYCloudAccountsPublic,
   seedYCloudAccountsFromEnv,
@@ -247,6 +252,69 @@ export async function updateInbox(input: {
   revalidatePath("/companies");
 }
 
+type AppSupabase = Awaited<ReturnType<typeof createClient>>;
+
+async function insertRolePermissions(
+  supabase: AppSupabase,
+  roleId: string,
+  codes: string[],
+) {
+  if (!codes.length) return;
+  const { data: perms, error } = await supabase
+    .from("permissions")
+    .select("id, code")
+    .in("code", codes);
+  if (error) throw new Error(error.message);
+  if (!perms?.length) return;
+  const { error: insertError } = await supabase.from("role_permissions").insert(
+    perms.map((p) => ({ role_id: roleId, permission_id: p.id })),
+  );
+  if (insertError) throw new Error(insertError.message);
+}
+
+async function replaceRolePermissions(
+  supabase: AppSupabase,
+  roleId: string,
+  codes: string[],
+  isPlatformAdmin: boolean,
+) {
+  const codesToInsert = isPlatformAdmin
+    ? codes
+    : codes.filter((code) => !isPlatformPermission(code));
+
+  if (isPlatformAdmin) {
+    const { error } = await supabase
+      .from("role_permissions")
+      .delete()
+      .eq("role_id", roleId);
+    if (error) throw new Error(error.message);
+  } else {
+    const { data: existing, error: existingError } = await supabase
+      .from("role_permissions")
+      .select("id, permissions(code)")
+      .eq("role_id", roleId);
+    if (existingError) throw new Error(existingError.message);
+    const idsToDelete = (existing ?? [])
+      .filter((row) => {
+        const perm = Array.isArray(row.permissions)
+          ? row.permissions[0]
+          : row.permissions;
+        const code = perm?.code as string | undefined;
+        return typeof code === "string" && !isPlatformPermission(code);
+      })
+      .map((row) => row.id as string);
+    if (idsToDelete.length) {
+      const { error } = await supabase
+        .from("role_permissions")
+        .delete()
+        .in("id", idsToDelete);
+      if (error) throw new Error(error.message);
+    }
+  }
+
+  await insertRolePermissions(supabase, roleId, codesToInsert);
+}
+
 export async function createRole(input: {
   companyId: string;
   name: string;
@@ -261,6 +329,15 @@ export async function createRole(input: {
   ) {
     throw new Error("forbidden");
   }
+  if (isReservedRoleName(input.name)) {
+    throw new Error("Ese nombre de rol está reservado");
+  }
+
+  const permissionCodes = sanitizeRolePermissionCodes(
+    input.permissionCodes,
+    [],
+    session.isPlatformAdmin,
+  );
 
   const supabase = await createClient();
   const { data: role, error } = await supabase
@@ -275,17 +352,7 @@ export async function createRole(input: {
     .single();
   if (error || !role) throw new Error(error?.message ?? "role_failed");
 
-  if (input.permissionCodes.length) {
-    const { data: perms } = await supabase
-      .from("permissions")
-      .select("id, code")
-      .in("code", input.permissionCodes);
-    if (perms?.length) {
-      await supabase.from("role_permissions").insert(
-        perms.map((p) => ({ role_id: role.id, permission_id: p.id })),
-      );
-    }
-  }
+  await insertRolePermissions(supabase, role.id, permissionCodes);
 
   revalidatePath("/settings/roles");
 }
@@ -305,7 +372,32 @@ export async function updateRole(input: {
   ) {
     throw new Error("forbidden");
   }
+  if (isReservedRoleName(input.name)) {
+    throw new Error("Ese nombre de rol está reservado");
+  }
+
   const supabase = await createClient();
+  const { data: existingRows, error: existingError } = await supabase
+    .from("role_permissions")
+    .select("permissions(code)")
+    .eq("role_id", input.id);
+  if (existingError) throw new Error(existingError.message);
+
+  const existingCodes = (existingRows ?? [])
+    .map((row) => {
+      const perm = Array.isArray(row.permissions)
+        ? row.permissions[0]
+        : row.permissions;
+      return perm?.code as string | undefined;
+    })
+    .filter((code): code is string => Boolean(code));
+
+  const permissionCodes = sanitizeRolePermissionCodes(
+    input.permissionCodes,
+    existingCodes,
+    session.isPlatformAdmin,
+  );
+
   const { error } = await supabase
     .from("roles")
     .update({
@@ -316,18 +408,12 @@ export async function updateRole(input: {
     .eq("company_id", input.companyId);
   if (error) throw new Error(error.message);
 
-  await supabase.from("role_permissions").delete().eq("role_id", input.id);
-  if (input.permissionCodes.length) {
-    const { data: perms } = await supabase
-      .from("permissions")
-      .select("id, code")
-      .in("code", input.permissionCodes);
-    if (perms?.length) {
-      await supabase.from("role_permissions").insert(
-        perms.map((p) => ({ role_id: input.id, permission_id: p.id })),
-      );
-    }
-  }
+  await replaceRolePermissions(
+    supabase,
+    input.id,
+    permissionCodes,
+    session.isPlatformAdmin,
+  );
   revalidatePath("/settings/roles");
 }
 

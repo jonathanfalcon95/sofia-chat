@@ -16,6 +16,8 @@ export type ConversationListFilters = {
   /** Free-text search over contact name / phone */
   phoneSearch?: string;
   contactTagId?: string;
+  /** Restrict to one company (required for Super Admin / multi-empresa). */
+  companyId?: string;
   /** Cursor: only rows strictly older than this ISO timestamp */
   before?: string | null;
   pageSize?: number;
@@ -118,6 +120,10 @@ export async function fetchConversationListPage(
 
   if (contactIdsFilter) {
     query = query.in("contact_id", contactIdsFilter);
+  }
+
+  if (filters.companyId) {
+    query = query.eq("company_id", filters.companyId);
   }
 
   if (filters.before) {

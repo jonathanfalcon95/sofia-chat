@@ -24,6 +24,7 @@ import {
   Tag,
   User,
   X,
+  Building2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn, isWithinCustomerWindow } from "@/lib/utils";
@@ -96,6 +97,8 @@ const ConversationSidePanel = dynamic(
   },
 );
 
+const INBOX_COMPANY_STORAGE_KEY = "sofia-inbox-company-id";
+
 function enrichMessages(rows: MessageRow[]) {
   return rows.map((m) => {
     const cachedPreview = takeMediaPreview(m.id);
@@ -110,6 +113,9 @@ export function InboxView({
   tags,
   contactTags = [],
   currentUserId,
+  companies = [],
+  initialCompanyId = "",
+  showCompanyFilter = false,
   children,
 }: {
   initialConversations: ConversationRow[];
@@ -128,6 +134,9 @@ export function InboxView({
     company_id: string;
   }>;
   currentUserId?: string;
+  companies?: Array<{ id: string; name: string }>;
+  initialCompanyId?: string;
+  showCompanyFilter?: boolean;
   children?: React.ReactNode;
 }) {
   const router = useRouter();
@@ -171,6 +180,8 @@ export function InboxView({
   const [debouncedPhoneSearch, setDebouncedPhoneSearch] = useState("");
   const [assigneeFilter, setAssigneeFilter] =
     useState<AssigneeFilter>("all");
+  const [companyId, setCompanyId] = useState(initialCompanyId);
+  const [storageChecked, setStorageChecked] = useState(!showCompanyFilter);
   const [savingTagId, setSavingTagId] = useState<string | null>(null);
   const [mediaSending, setMediaSending] = useState(false);
   const [replyTo, setReplyTo] = useState<MessageRow | null>(null);
@@ -193,6 +204,7 @@ export function InboxView({
     debouncedPhoneSearch,
     filterAgentId,
     filterContactTagId,
+    companyId,
   });
 
   useEffect(() => {
@@ -206,6 +218,7 @@ export function InboxView({
       debouncedPhoneSearch,
       filterAgentId,
       filterContactTagId,
+      companyId,
     };
   }, [
     assigneeFilter,
@@ -213,6 +226,7 @@ export function InboxView({
     debouncedPhoneSearch,
     filterAgentId,
     filterContactTagId,
+    companyId,
   ]);
 
   useEffect(() => {
@@ -265,16 +279,52 @@ export function InboxView({
       currentUserId,
       phoneSearch: debouncedPhoneSearch,
       contactTagId: filterContactTagId || undefined,
+      companyId: companyId || undefined,
       pageSize: CONVERSATION_PAGE_SIZE,
     }),
     [
       assigneeFilter,
+      companyId,
       currentUserId,
       debouncedPhoneSearch,
       filterAgentId,
       filterContactTagId,
     ],
   );
+
+  const visibleAgents = useMemo(
+    () =>
+      companyId ? agents.filter((a) => a.company_id === companyId) : agents,
+    [agents, companyId],
+  );
+  const visibleContactTags = useMemo(
+    () =>
+      companyId
+        ? contactTags.filter((t) => t.company_id === companyId)
+        : contactTags,
+    [contactTags, companyId],
+  );
+
+  const persistCompanyId = useCallback((nextId: string) => {
+    setCompanyId(nextId);
+    setFilterAgentId("");
+    setFilterContactTagId("");
+    try {
+      sessionStorage.setItem(INBOX_COMPANY_STORAGE_KEY, nextId);
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, []);
+
+  function onCompanySelect(nextId: string) {
+    const activeCompany = conversations.find((c) => c.id === activeId)
+      ?.company_id;
+    persistCompanyId(nextId);
+    if (activeId && activeCompany && activeCompany !== nextId) {
+      desktopRedirectRef.current = false;
+      router.replace("/conversations", { scroll: false });
+    }
+  }
 
   function resizeComposer() {
     const el = composerRef.current;
@@ -309,16 +359,74 @@ export function InboxView({
     return () => mq.removeEventListener("change", sync);
   }, []);
 
-  // Desktop: if we land on /conversations with no id, deep-link the first chat.
+  // Restore last company before deep-linking the first chat.
   useEffect(() => {
-    if (routeId || pendingRouteId || isDesktop !== true || desktopRedirectRef.current) {
+    if (!showCompanyFilter) {
+      setStorageChecked(true);
       return;
     }
-    const firstId = initialConversations[0]?.id;
+    try {
+      const stored = sessionStorage.getItem(INBOX_COMPANY_STORAGE_KEY);
+      if (stored && companies.some((c) => c.id === stored)) {
+        setCompanyId(stored);
+      }
+    } catch {
+      /* ignore */
+    }
+    setStorageChecked(true);
+  }, [companies, showCompanyFilter]);
+
+  // Deep-link from Kanban/tickets: if the thread isn't in this company's list, switch.
+  useEffect(() => {
+    if (!showCompanyFilter || !routeId || !storageChecked) return;
+    const inList = conversations.find((c) => c.id === routeId);
+    if (inList) return;
+    let cancelled = false;
+    void (async () => {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("conversations")
+        .select("company_id")
+        .eq("id", routeId)
+        .maybeSingle();
+      if (cancelled || !data?.company_id) return;
+      if (data.company_id !== filtersRef.current.companyId) {
+        persistCompanyId(data.company_id);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the route conversation changes
+  }, [routeId, showCompanyFilter, storageChecked, persistCompanyId]);
+
+  // Desktop: if we land on /conversations with no id, deep-link the first chat.
+  useEffect(() => {
+    if (
+      !storageChecked ||
+      routeId ||
+      pendingRouteId ||
+      isDesktop !== true ||
+      desktopRedirectRef.current
+    ) {
+      return;
+    }
+    if (companyId && conversations[0]?.company_id !== companyId) {
+      return;
+    }
+    const firstId = conversations[0]?.id;
     if (!firstId) return;
     desktopRedirectRef.current = true;
     router.replace(`/conversations/${firstId}`, { scroll: false });
-  }, [routeId, pendingRouteId, isDesktop, initialConversations, router]);
+  }, [
+    storageChecked,
+    routeId,
+    pendingRouteId,
+    isDesktop,
+    companyId,
+    conversations,
+    router,
+  ]);
 
   const reloadConversations = useCallback(
     async (mode: "merge" | "replace" = "merge") => {
@@ -332,6 +440,7 @@ export function InboxView({
           currentUserId: f.currentUserId,
           phoneSearch: f.debouncedPhoneSearch,
           contactTagId: f.filterContactTagId || undefined,
+          companyId: f.companyId || undefined,
           pageSize: CONVERSATION_PAGE_SIZE,
         });
         setConversations((prev) =>
@@ -399,6 +508,7 @@ export function InboxView({
         currentUserId: f.currentUserId,
         phoneSearch: f.debouncedPhoneSearch,
         contactTagId: f.filterContactTagId || undefined,
+        companyId: f.companyId || undefined,
         before,
         pageSize: CONVERSATION_PAGE_SIZE,
       });
@@ -500,6 +610,7 @@ export function InboxView({
   const onConversationChange = useCallback(
     (patch: {
       id: string;
+      company_id?: string;
       last_message_at?: string | null;
       last_message_preview?: string | null;
       unread_count?: number;
@@ -508,6 +619,13 @@ export function InboxView({
       assignee_id?: string | null;
       status?: string;
     }) => {
+      if (
+        filtersRef.current.companyId &&
+        patch.company_id &&
+        patch.company_id !== filtersRef.current.companyId
+      ) {
+        return;
+      }
       const { bump_unread, unread_count, ...rest } = patch;
       const isActive = patch.id === activeIdRef.current;
       // Webhook bumps unread on every inbound; if the thread is open, persist read.
@@ -554,6 +672,7 @@ export function InboxView({
 
   useRealtimeInbox({
     activeConversationId: activeId ?? undefined,
+    companyId: companyId || undefined,
     onMessage,
     onConversationChange,
     onReloadConversations: queueReloadConversations,
@@ -1115,6 +1234,26 @@ export function InboxView({
               ) : null}
             </div>
 
+            {showCompanyFilter && companies.length > 0 ? (
+              <div className="relative">
+                <label className="sr-only">Empresa</label>
+                <Building2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" />
+                <select
+                  value={companyId}
+                  onChange={(e) => onCompanySelect(e.target.value)}
+                  className="h-9 w-full appearance-none rounded-lg border border-[var(--line)] bg-[var(--surface-2)] pl-8 pr-7 text-xs font-medium text-[var(--ink)] outline-none transition-all hover:border-[var(--line)] hover:bg-[var(--surface)]"
+                  aria-label="Filtrar por empresa"
+                >
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" />
+              </div>
+            ) : null}
+
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" />
               <Input
@@ -1166,9 +1305,9 @@ export function InboxView({
               })}
             </div>
 
-            {agents.length > 0 || contactTags.length > 0 ? (
+            {visibleAgents.length > 0 || visibleContactTags.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 pt-0.5">
-                {agents.length > 0 ? (
+                {visibleAgents.length > 0 ? (
                   <div className="relative min-w-0">
                     <label className="sr-only">Filtrar por agente</label>
                     <div className="relative flex items-center">
@@ -1187,9 +1326,9 @@ export function InboxView({
                         <option value="" className="text-[var(--ink)] bg-[var(--surface)]">
                           Agentes: Todos
                         </option>
-                        {agents.map((a) => (
+                        {visibleAgents.map((a) => (
                           <option
-                            key={a.id}
+                            key={`${a.company_id}-${a.id}`}
                             value={a.id}
                             className="text-[var(--ink)] bg-[var(--surface)]"
                           >
@@ -1202,7 +1341,7 @@ export function InboxView({
                   </div>
                 ) : null}
 
-                {contactTags.length > 0 ? (
+                {visibleContactTags.length > 0 ? (
                   <div className="relative min-w-0">
                     <label className="sr-only">Filtrar por tag</label>
                     <div className="relative flex items-center">
@@ -1221,7 +1360,7 @@ export function InboxView({
                         <option value="" className="text-[var(--ink)] bg-[var(--surface)]">
                           Tags: Todos
                         </option>
-                        {contactTags.map((t) => (
+                        {visibleContactTags.map((t) => (
                           <option
                             key={t.id}
                             value={t.id}

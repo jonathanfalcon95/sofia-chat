@@ -5,7 +5,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Pencil, Plus } from "lucide-react";
 import { createRole, updateRole } from "@/app/actions/admin";
-import { PERMISSIONS, PERMISSION_LABELS } from "@/lib/rbac/permissions";
+import {
+  PERMISSIONS,
+  PERMISSION_LABELS,
+  isPlatformPermission,
+} from "@/lib/rbac/permissions";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +42,7 @@ export function RolesManager({
   page,
   pageSize,
   filters,
+  isPlatformAdmin = false,
 }: {
   roles: RoleRow[];
   companies: Array<{ id: string; name: string }>;
@@ -46,6 +51,7 @@ export function RolesManager({
   page: number;
   pageSize: number;
   filters: { q: string; companyId: string };
+  isPlatformAdmin: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -184,13 +190,17 @@ export function RolesManager({
               <Input name="description" />
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              {permissions.map((p) => (
-                <label key={p.code} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" name={`perm_${p.code}`} />
-                  {PERMISSION_LABELS[p.code as keyof typeof PERMISSION_LABELS] ||
-                    p.code}
-                </label>
-              ))}
+              {permissions
+                .filter(
+                  (p) => isPlatformAdmin || !isPlatformPermission(p.code),
+                )
+                .map((p) => (
+                  <label key={p.code} className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" name={`perm_${p.code}`} />
+                    {PERMISSION_LABELS[p.code as keyof typeof PERMISSION_LABELS] ||
+                      p.code}
+                  </label>
+                ))}
             </div>
             <Button type="submit" className="w-full" loading={loading}>
               Crear
@@ -244,21 +254,33 @@ export function RolesManager({
                 />
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
-                {permissions.map((p) => (
-                  <label
-                    key={p.code}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      name={`perm_${p.code}`}
-                      defaultChecked={editing.codes.includes(p.code)}
-                    />
-                    {PERMISSION_LABELS[
-                      p.code as keyof typeof PERMISSION_LABELS
-                    ] || p.code}
-                  </label>
-                ))}
+                {permissions
+                  .filter(
+                    (p) =>
+                      isPlatformAdmin ||
+                      !isPlatformPermission(p.code) ||
+                      editing.codes.includes(p.code),
+                  )
+                  .map((p) => {
+                    const locked =
+                      !isPlatformAdmin && isPlatformPermission(p.code);
+                    return (
+                      <label
+                        key={p.code}
+                        className={`flex items-center gap-2 text-sm${locked ? " opacity-60" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          name={`perm_${p.code}`}
+                          defaultChecked={editing.codes.includes(p.code)}
+                          disabled={locked}
+                        />
+                        {PERMISSION_LABELS[
+                          p.code as keyof typeof PERMISSION_LABELS
+                        ] || p.code}
+                      </label>
+                    );
+                  })}
               </div>
               <Button type="submit" className="w-full" loading={loading}>
                 Guardar

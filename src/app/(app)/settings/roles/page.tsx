@@ -12,7 +12,7 @@ export default async function RolesPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireAnyPermission("roles.manage");
+  const session = await requireAnyPermission("roles.manage");
   const sp = await searchParams;
   const { page, pageSize, from, to } = parsePageParams(sp);
   const q = (firstSearchParam(sp.q) ?? "").trim();
@@ -72,6 +72,7 @@ export default async function RolesPage({
       page={page}
       pageSize={pageSize}
       filters={{ q, companyId }}
+      isPlatformAdmin={Boolean(session?.isPlatformAdmin)}
     />
   );
 }

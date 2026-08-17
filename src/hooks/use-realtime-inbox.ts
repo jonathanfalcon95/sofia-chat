@@ -20,6 +20,7 @@ type MessageRow = {
 
 type ConversationPatch = {
   id: string;
+  company_id?: string;
   last_message_at?: string | null;
   last_message_preview?: string | null;
   unread_count?: number;
@@ -32,16 +33,19 @@ type ConversationPatch = {
 
 export function useRealtimeInbox({
   activeConversationId,
+  companyId,
   onMessage,
   onConversationChange,
   onReloadConversations,
 }: {
   activeConversationId?: string;
+  companyId?: string;
   onMessage: (message: MessageRow) => void;
   onConversationChange: (patch: ConversationPatch) => void;
   onReloadConversations: () => void;
 }) {
   const activeIdRef = useRef(activeConversationId);
+  const companyIdRef = useRef(companyId);
   const onMessageRef = useRef(onMessage);
   const onConversationChangeRef = useRef(onConversationChange);
   const onReloadRef = useRef(onReloadConversations);
@@ -51,12 +55,16 @@ export function useRealtimeInbox({
   }, [activeConversationId]);
 
   useEffect(() => {
+    companyIdRef.current = companyId;
+  }, [companyId]);
+
+  useEffect(() => {
     onMessageRef.current = onMessage;
     onConversationChangeRef.current = onConversationChange;
     onReloadRef.current = onReloadConversations;
   }, [onMessage, onConversationChange, onReloadConversations]);
 
-  // Stable list channel — does not recreate when switching threads
+  // List channel — recreate when the company filter changes.
   useEffect(() => {
     const supabase = createClient();
     void supabase.auth.getSession().then(({ data }) => {
@@ -65,14 +73,27 @@ export function useRealtimeInbox({
       }
     });
     const listChannel = supabase
-      .channel("sofia-conversations-list")
+      .channel(`sofia-conversations-list-${companyId || "all"}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
+        {
+          event: "*",
+          schema: "public",
+          table: "conversations",
+          ...(companyId ? { filter: `company_id=eq.${companyId}` } : {}),
+        },
         (payload) => {
           const row = (payload.new || payload.old) as ConversationPatch | null;
           if (!row?.id) {
             onReloadRef.current();
+            return;
+          }
+          const selectedCompanyId = companyIdRef.current;
+          if (
+            selectedCompanyId &&
+            row.company_id &&
+            row.company_id !== selectedCompanyId
+          ) {
             return;
           }
           if (payload.eventType === "INSERT") {
@@ -122,7 +143,7 @@ export function useRealtimeInbox({
     return () => {
       supabase.removeChannel(listChannel);
     };
-  }, []);
+  }, [companyId]);
 
   // Thread channel only for the active conversation (status updates, etc.)
   useEffect(() => {

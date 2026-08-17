@@ -20,6 +20,9 @@ export default async function ConversationsLayout({
       tags={data.tags}
       contactTags={data.contactTags}
       currentUserId={session?.userId}
+      companies={data.companies}
+      initialCompanyId={data.initialCompanyId}
+      showCompanyFilter={data.showCompanyFilter}
     >
       {children}
     </InboxView>

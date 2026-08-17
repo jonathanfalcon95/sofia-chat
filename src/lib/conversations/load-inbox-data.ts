@@ -1,15 +1,30 @@
 import { createClient } from "@/lib/supabase/server";
 import { listCompanyAgents } from "@/lib/agents";
+import { getAppSession } from "@/lib/rbac/session";
 import { MESSAGE_PAGE_SIZE, MESSAGE_SELECT } from "./types";
 import { normalizeNotes } from "./normalize";
 import type { MessageRow } from "./types";
 import { nowMs, reportServerDuration } from "./perf";
 import { fetchConversationListPage } from "./fetch-conversation-list";
 
+export type InboxCompany = { id: string; name: string };
+
 export async function loadInboxListData() {
   const startedAt = nowMs();
   const supabase = await createClient();
   const conversationQueryStartedAt = nowMs();
+
+  const [session, { data: companies }] = await Promise.all([
+    getAppSession(),
+    supabase.from("companies").select("id, name").order("name"),
+  ]);
+
+  const companyList = (companies ?? []) as InboxCompany[];
+  const showCompanyFilter =
+    Boolean(session?.isPlatformAdmin) || companyList.length > 1;
+  const initialCompanyId = showCompanyFilter
+    ? (companyList[0]?.id ?? "")
+    : "";
 
   const [
     listPage,
@@ -17,7 +32,11 @@ export async function loadInboxListData() {
     { data: tags },
     { data: contactTags },
   ] = await Promise.all([
-    fetchConversationListPage(supabase),
+    showCompanyFilter && !initialCompanyId
+      ? Promise.resolve({ conversations: [], hasMore: false })
+      : fetchConversationListPage(supabase, {
+          companyId: initialCompanyId || undefined,
+        }),
     listCompanyAgents(),
     supabase
       .from("tags")
@@ -48,6 +67,9 @@ export async function loadInboxListData() {
     tags: tags ?? [],
     contactTags: contactTags ?? [],
     inboxes: [],
+    companies: companyList,
+    initialCompanyId,
+    showCompanyFilter,
   };
 }
 
