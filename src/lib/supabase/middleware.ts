@@ -1,8 +1,31 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isSafeNextPath, loginUrlWithNext } from "@/lib/auth/safe-next-path";
+
+function nextWithPathname(request: NextRequest) {
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-pathname", request.nextUrl.pathname);
+  requestHeaders.set("x-search", request.nextUrl.search);
+  return NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
+}
+
+function redirectPreservingCookies(
+  supabaseResponse: NextResponse,
+  location: URL,
+) {
+  const redirectResponse = NextResponse.redirect(location);
+  supabaseResponse.cookies.getAll().forEach((cookie) => {
+    redirectResponse.cookies.set(cookie);
+  });
+  return redirectResponse;
+}
 
 export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request });
+  let supabaseResponse = nextWithPathname(request);
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,7 +39,7 @@ export async function updateSession(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value),
           );
-          supabaseResponse = NextResponse.next({ request });
+          supabaseResponse = nextWithPathname(request);
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options),
           );
@@ -37,15 +60,20 @@ export async function updateSession(request: NextRequest) {
     path.startsWith("/auth");
 
   if (!user && !isPublic) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
+    const loginPath = loginUrlWithNext(path, request.nextUrl.search);
+    return redirectPreservingCookies(
+      supabaseResponse,
+      new URL(loginPath, request.url),
+    );
   }
 
   if (user && isAuthPage) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/conversations";
-    return NextResponse.redirect(url);
+    const next = request.nextUrl.searchParams.get("next");
+    const destination = isSafeNextPath(next) ? next : "/conversations";
+    return redirectPreservingCookies(
+      supabaseResponse,
+      new URL(destination, request.url),
+    );
   }
 
   return supabaseResponse;

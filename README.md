@@ -56,6 +56,16 @@ Eventos:
 
 La URL pública de producción es `https://chatbase-beryl.vercel.app/api/webhooks/ycloud/<accountId>`. El secret lo genera YCloud; no se pega a mano al crear el endpoint.
 
+## Deep links de chat
+
+Abrir un hilo por GUID de empresa + teléfono del contacto (requiere login y acceso a esa empresa):
+
+```
+/c/{guid_company}/{telefono_sin_plus}
+```
+
+Documentación: [docs/deep-links-chat.md](docs/deep-links-chat.md).
+
 ## Deploy Vercel
 
 Producción actual: `https://chatbase-beryl.vercel.app`

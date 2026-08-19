@@ -1,5 +1,7 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { loginUrlWithNext } from "@/lib/auth/safe-next-path";
 import { getAppSession } from "@/lib/rbac/session";
 
 export default async function AppLayout({
@@ -8,7 +10,12 @@ export default async function AppLayout({
   children: React.ReactNode;
 }) {
   const session = await getAppSession();
-  if (!session) redirect("/login");
+  if (!session) {
+    const headerList = await headers();
+    const pathname = headerList.get("x-pathname") ?? "";
+    const search = headerList.get("x-search") ?? "";
+    redirect(loginUrlWithNext(pathname, search));
+  }
 
   const permissions = Array.from(
     new Set(session.memberships.flatMap((m) => m.permissions)),
