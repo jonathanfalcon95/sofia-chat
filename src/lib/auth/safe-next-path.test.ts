@@ -4,10 +4,12 @@ import { isSafeNextPath, loginUrlWithNext } from "./safe-next-path.ts";
 
 const GUID = "08be5fd3-a186-4141-83c8-4a9133de25f4";
 const DEEP = `/c/${GUID}/584266330794`;
+const PROVESALUD = "/c/e52ca65d-d58b-4973-860f-25086ff309a9/584241889634";
 const THREAD = "/conversations/e461b6c5-7619-453d-9784-94fc9af215bb";
 
 test("isSafeNextPath accepts chat deep links and conversation threads", () => {
   assert.equal(isSafeNextPath(DEEP), true);
+  assert.equal(isSafeNextPath(PROVESALUD), true);
   assert.equal(isSafeNextPath("/conversations"), true);
   assert.equal(isSafeNextPath(THREAD), true);
   assert.equal(isSafeNextPath("/conversations/"), true);
@@ -29,6 +31,10 @@ test("loginUrlWithNext encodes allowed destinations", () => {
   assert.equal(
     loginUrlWithNext(DEEP),
     `/login?next=${encodeURIComponent(DEEP)}`,
+  );
+  assert.equal(
+    loginUrlWithNext(PROVESALUD),
+    `/login?next=${encodeURIComponent(PROVESALUD)}`,
   );
   assert.equal(
     loginUrlWithNext(THREAD),

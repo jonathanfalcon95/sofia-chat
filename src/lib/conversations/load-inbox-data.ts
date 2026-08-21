@@ -1,11 +1,19 @@
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { listCompanyAgents } from "@/lib/agents";
 import { getAppSession } from "@/lib/rbac/session";
 import { MESSAGE_PAGE_SIZE, MESSAGE_SELECT } from "./types";
 import { normalizeNotes } from "./normalize";
-import type { MessageRow } from "./types";
+import type { ConversationRow, MessageRow } from "./types";
 import { nowMs, reportServerDuration } from "./perf";
-import { fetchConversationListPage } from "./fetch-conversation-list";
+import {
+  fetchConversationById,
+  fetchConversationListPage,
+} from "./fetch-conversation-list";
+import {
+  INBOX_COMPANY_COOKIE,
+  pickPreferredCompanyId,
+} from "./inbox-company-preference";
 
 export type InboxCompany = { id: string; name: string };
 
@@ -14,16 +22,21 @@ export async function loadInboxListData() {
   const supabase = await createClient();
   const conversationQueryStartedAt = nowMs();
 
-  const [session, { data: companies }] = await Promise.all([
+  const [session, { data: companies }, cookieStore] = await Promise.all([
     getAppSession(),
     supabase.from("companies").select("id, name").order("name"),
+    cookies(),
   ]);
 
   const companyList = (companies ?? []) as InboxCompany[];
   const showCompanyFilter =
     Boolean(session?.isPlatformAdmin) || companyList.length > 1;
+  const preferredCompanyId = pickPreferredCompanyId(
+    companyList,
+    cookieStore.get(INBOX_COMPANY_COOKIE)?.value,
+  );
   const initialCompanyId = showCompanyFilter
-    ? (companyList[0]?.id ?? "")
+    ? (preferredCompanyId ?? companyList[0]?.id ?? "")
     : "";
 
   const [
@@ -98,10 +111,12 @@ export async function loadConversationDetailData(
         .order("created_at", { ascending: false })
     : Promise.resolve({ data: [] as Array<Record<string, unknown>> });
 
-  const [{ data: messageRows }, { data: noteRows }] = await Promise.all([
-    messagesQuery,
-    notesQuery,
-  ]);
+  const [{ data: messageRows }, { data: noteRows }, conversation] =
+    await Promise.all([
+      messagesQuery,
+      notesQuery,
+      fetchConversationById(supabase, conversationId),
+    ]);
   reportServerDuration("detail_messages_query", messagesStartedAt, {
     conversationId,
     rows: messageRows?.length ?? 0,
@@ -113,6 +128,7 @@ export async function loadConversationDetailData(
   });
 
   return {
+    conversation: conversation as ConversationRow | null,
     initialMessages: ((messageRows as MessageRow[] | null) ?? []).slice().reverse(),
     initialNotes: includeNotes
       ? normalizeNotes(noteRows as Array<Record<string, unknown>> | null)
@@ -127,6 +143,7 @@ export async function loadInboxBootstrap(conversationId?: string) {
     conversationId
       ? loadConversationDetailData(conversationId, { includeNotes: true })
       : Promise.resolve({
+          conversation: null as ConversationRow | null,
           initialMessages: [] as MessageRow[],
           initialNotes: [],
           hasMoreMessages: false,

@@ -35,8 +35,7 @@ export function LoginForm({ next }: { next?: string }) {
     toast.success("Bienvenido a Sofia Chat");
 
     if (isSafeNextPath(next)) {
-      router.replace(next);
-      router.refresh();
+      window.location.assign(next);
       return;
     }
 

@@ -7,13 +7,15 @@ import {
   useMemo,
   useRef,
 } from "react";
-import type { MessageRow, NoteRow } from "@/lib/conversations/types";
+import type { ConversationRow, MessageRow, NoteRow } from "@/lib/conversations/types";
 
 export type ThreadBootstrapPayload = {
   conversationId: string;
   messages: MessageRow[];
   hasMore: boolean;
   notes?: NoteRow[];
+  conversation?: ConversationRow | null;
+  missing?: boolean;
 };
 
 type InboxThreadContextValue = {
@@ -62,11 +64,15 @@ export function InboxThreadBootstrap({
   initialMessages,
   initialHasMoreMessages = false,
   initialNotes = [],
+  conversation = null,
+  missing = false,
 }: {
   conversationId: string;
   initialMessages: MessageRow[];
   initialHasMoreMessages?: boolean;
   initialNotes?: NoteRow[];
+  conversation?: ConversationRow | null;
+  missing?: boolean;
 }) {
   const { applyBootstrap } = useInboxThreadContext();
 
@@ -76,13 +82,17 @@ export function InboxThreadBootstrap({
       messages: initialMessages,
       hasMore: initialHasMoreMessages,
       notes: initialNotes,
+      conversation,
+      missing,
     });
   }, [
     applyBootstrap,
+    conversation,
     conversationId,
     initialMessages,
     initialHasMoreMessages,
     initialNotes,
+    missing,
   ]);
 
   return null;

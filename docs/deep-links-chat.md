@@ -105,7 +105,8 @@ Se rechazan `//sitio-externo`, `https://...` y cualquier otra ruta (por ejemplo 
 
 | Archivo | Rol |
 |---------|-----|
-| `src/app/(app)/c/[companyGuid]/[phone]/page.tsx` | Ruta del deep link |
+| `src/app/(app)/c/[companyGuid]/[phone]/route.ts` | Ruta del deep link (307) |
+| `src/app/(app)/chat-not-found/page.tsx` | UI de no encontrado |
 | `src/lib/conversations/resolve-chat-by-phone.ts` | Lookup empresa + teléfono |
 | `src/lib/conversations/phone-digits.ts` | Normalización del número |
 | `src/lib/auth/safe-next-path.ts` | Validación de `next` |
@@ -126,5 +127,5 @@ El usuario de Sofia Chat debe tener acceso a esa empresa. Si no está logueado, 
 ## Pruebas unitarias
 
 ```bash
-node --test --experimental-strip-types src/lib/auth/safe-next-path.test.ts src/lib/conversations/phone-digits.test.ts
+node --test --experimental-strip-types src/lib/auth/safe-next-path.test.ts src/lib/conversations/phone-digits.test.ts src/lib/conversations/fetch-conversation-list.test.ts src/lib/conversations/resolve-chat-by-phone.test.ts src/lib/conversations/inbox-company-preference.test.ts
 ```

@@ -57,6 +57,7 @@ import {
   InboxThreadProvider,
   type ThreadBootstrapPayload,
 } from "@/components/conversations/inbox-thread-context";
+import { ChatNotFound } from "@/components/conversations/chat-not-found";
 import {
   CONVERSATION_PAGE_SIZE,
   MESSAGE_PAGE_SIZE,
@@ -69,8 +70,10 @@ import {
 import { normalizeNotes } from "@/lib/conversations/normalize";
 import {
   appendConversationListPage,
+  fetchConversationById,
   fetchConversationListPage,
   mergeConversationListPage,
+  upsertConversationInList,
 } from "@/lib/conversations/fetch-conversation-list";
 import {
   durationSince,
@@ -83,6 +86,10 @@ import {
   syncSofiaStoppedAllFromCommand,
   writeSofiaStoppedAll,
 } from "@/lib/conversations/sofia-status";
+import {
+  INBOX_COMPANY_STORAGE_KEY,
+  writeInboxCompanyCookie,
+} from "@/lib/conversations/inbox-company-preference";
 
 const ConversationSidePanel = dynamic(
   () =>
@@ -96,8 +103,6 @@ const ConversationSidePanel = dynamic(
     ),
   },
 );
-
-const INBOX_COMPANY_STORAGE_KEY = "sofia-inbox-company-id";
 
 function enrichMessages(rows: MessageRow[]) {
   return rows.map((m) => {
@@ -187,10 +192,12 @@ export function InboxView({
   const [replyTo, setReplyTo] = useState<MessageRow | null>(null);
   const [sofiaStoppedAll, setSofiaStoppedAll] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [threadMissing, setThreadMissing] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const desktopRedirectRef = useRef(false);
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const notesLoadingForIdRef = useRef<string | null>(null);
+  const routeFetchRef = useRef<string | null>(null);
   const reloadDebounceRef = useRef<number | null>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const openStartByConversationRef = useRef<Map<string, number>>(new Map());
@@ -228,6 +235,11 @@ export function InboxView({
     filterContactTagId,
     companyId,
   ]);
+
+  useEffect(() => {
+    setThreadMissing(false);
+    routeFetchRef.current = null;
+  }, [routeId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -309,6 +321,7 @@ export function InboxView({
     setCompanyId(nextId);
     setFilterAgentId("");
     setFilterContactTagId("");
+    writeInboxCompanyCookie(nextId);
     try {
       sessionStorage.setItem(INBOX_COMPANY_STORAGE_KEY, nextId);
     } catch {
@@ -376,29 +389,59 @@ export function InboxView({
     setStorageChecked(true);
   }, [companies, showCompanyFilter]);
 
-  // Deep-link from Kanban/tickets: if the thread isn't in this company's list, switch.
+  // Deep-link / direct URL: if the thread isn't in the loaded page, fetch it.
   useEffect(() => {
-    if (!showCompanyFilter || !routeId || !storageChecked) return;
+    if (!routeId || !storageChecked) return;
     const inList = conversations.find((c) => c.id === routeId);
-    if (inList) return;
+    if (inList) {
+      routeFetchRef.current = null;
+      setThreadMissing(false);
+      if (showCompanyFilter && inList.company_id !== companyId) {
+        persistCompanyId(inList.company_id);
+      }
+      return;
+    }
+    if (routeFetchRef.current === routeId) return;
+    routeFetchRef.current = routeId;
     let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      if (!cancelled) setThreadMissing(true);
+    }, 8000);
     void (async () => {
-      const supabase = createClient();
-      const { data } = await supabase
-        .from("conversations")
-        .select("company_id")
-        .eq("id", routeId)
-        .maybeSingle();
-      if (cancelled || !data?.company_id) return;
-      if (data.company_id !== filtersRef.current.companyId) {
-        persistCompanyId(data.company_id);
+      try {
+        const supabase = createClient();
+        const row = await fetchConversationById(supabase, routeId);
+        if (cancelled) return;
+        if (!row) {
+          setThreadMissing(true);
+          return;
+        }
+        setThreadMissing(false);
+        setConversations((prev) => upsertConversationInList(prev, row));
+        if (
+          showCompanyFilter &&
+          row.company_id !== filtersRef.current.companyId
+        ) {
+          persistCompanyId(row.company_id);
+        }
+      } catch {
+        if (!cancelled) setThreadMissing(true);
+      } finally {
+        window.clearTimeout(timeout);
       }
     })();
     return () => {
       cancelled = true;
+      window.clearTimeout(timeout);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the route conversation changes
-  }, [routeId, showCompanyFilter, storageChecked, persistCompanyId]);
+  }, [
+    routeId,
+    conversations,
+    storageChecked,
+    showCompanyFilter,
+    companyId,
+    persistCompanyId,
+  ]);
 
   // Desktop: if we land on /conversations with no id, deep-link the first chat.
   useEffect(() => {
@@ -443,11 +486,18 @@ export function InboxView({
           companyId: f.companyId || undefined,
           pageSize: CONVERSATION_PAGE_SIZE,
         });
-        setConversations((prev) =>
-          mode === "replace"
-            ? page.conversations
-            : mergeConversationListPage(prev, page.conversations),
-        );
+        setConversations((prev) => {
+          const next =
+            mode === "replace"
+              ? page.conversations
+              : mergeConversationListPage(prev, page.conversations);
+          const keepId = activeIdRef.current;
+          if (!keepId || next.some((c) => c.id === keepId)) return next;
+          const kept = prev.find((c) => c.id === keepId);
+          if (!kept) return next;
+          if (f.companyId && kept.company_id !== f.companyId) return next;
+          return upsertConversationInList(next, kept);
+        });
         setHasMoreConversations(page.hasMore);
         reportClientConversationMetric("conversation_list_reload", {
           durationMs: durationSince(startedAt),
@@ -747,6 +797,12 @@ export function InboxView({
 
   const applyBootstrap = useCallback(
     (payload: ThreadBootstrapPayload) => {
+      if (payload.missing) {
+        setThreadMissing(true);
+        setLoadingThread(false);
+        return;
+      }
+
       const nextMessages = enrichMessages(payload.messages);
       const cached = threadCacheRef.current.get(payload.conversationId);
       const nextNotes =
@@ -759,6 +815,18 @@ export function InboxView({
         notes: nextNotes,
         hasMore: payload.hasMore,
       });
+
+      if (payload.conversation) {
+        const row = payload.conversation;
+        setThreadMissing(false);
+        setConversations((prev) => upsertConversationInList(prev, row));
+        if (
+          row.company_id &&
+          row.company_id !== filtersRef.current.companyId
+        ) {
+          persistCompanyId(row.company_id);
+        }
+      }
 
       // Only paint the thread the user is currently viewing (pending soft-switch or URL).
       if (payload.conversationId !== activeIdRef.current) {
@@ -791,7 +859,7 @@ export function InboxView({
         void loadNotesInBackground(payload.conversationId);
       }
     },
-    [loadNotesInBackground, markConversationRead],
+    [loadNotesInBackground, markConversationRead, persistCompanyId],
   );
 
   useEffect(() => {
@@ -804,7 +872,7 @@ export function InboxView({
         return;
       }
       const cached = threadCacheRef.current.get(activeId);
-      if (cached?.messages?.length) {
+      if (cached) {
         setMessages(cached.messages);
         setNotes(cached.notes);
         setHasMoreMessages(cached.hasMore);
@@ -1670,6 +1738,8 @@ export function InboxView({
                 }}
               />
             </div>
+          ) : threadMissing && activeId ? (
+            <ChatNotFound />
           ) : activeId ? (
             <div className="m-auto flex items-center gap-2 p-6 text-[var(--muted)]">
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando conversación…

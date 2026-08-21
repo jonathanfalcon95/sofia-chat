@@ -12,9 +12,13 @@ export default async function ConversationDetailPage({
   return (
     <InboxThreadBootstrap
       conversationId={id}
-      initialMessages={detail.initialMessages}
-      initialHasMoreMessages={detail.hasMoreMessages}
+      initialMessages={detail.conversation ? detail.initialMessages : []}
+      initialHasMoreMessages={
+        detail.conversation ? detail.hasMoreMessages : false
+      }
       initialNotes={detail.initialNotes}
+      conversation={detail.conversation}
+      missing={!detail.conversation}
     />
   );
 }

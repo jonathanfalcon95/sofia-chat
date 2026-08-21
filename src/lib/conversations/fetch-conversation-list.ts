@@ -7,6 +7,11 @@ import {
   type AssigneeFilter,
   type ConversationRow,
 } from "./types";
+import {
+  appendConversationListPage,
+  mergeConversationListPage,
+  upsertConversationInList,
+} from "./conversation-list";
 
 export type ConversationListFilters = {
   assignee?: AssigneeFilter;
@@ -145,22 +150,24 @@ export async function fetchConversationListPage(
   };
 }
 
-/** Merge a refreshed first page into an already-loaded list without dropping older pages. */
-export function mergeConversationListPage(
-  prev: ConversationRow[],
-  firstPage: ConversationRow[],
-): ConversationRow[] {
-  const firstIds = new Set(firstPage.map((c) => c.id));
-  const older = prev.filter((c) => !firstIds.has(c.id));
-  return [...firstPage, ...older];
-}
+export {
+  appendConversationListPage,
+  mergeConversationListPage,
+  upsertConversationInList,
+};
 
-/** Append a page of older conversations, skipping duplicates. */
-export function appendConversationListPage(
-  prev: ConversationRow[],
-  nextPage: ConversationRow[],
-): ConversationRow[] {
-  const seen = new Set(prev.map((c) => c.id));
-  const appended = nextPage.filter((c) => !seen.has(c.id));
-  return [...prev, ...appended];
+export async function fetchConversationById(
+  supabase: SupabaseClient,
+  conversationId: string,
+): Promise<ConversationRow | null> {
+  if (!conversationId) return null;
+  const { data, error } = await supabase
+    .from("conversations")
+    .select(CONVERSATION_LIST_SELECT)
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return (
+    normalizeConversations([data as Record<string, unknown>])[0] ?? null
+  );
 }
