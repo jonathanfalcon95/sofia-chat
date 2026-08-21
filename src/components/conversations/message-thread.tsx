@@ -11,6 +11,7 @@ import {
   SmilePlus,
   Square,
   AlertTriangle,
+  ExternalLink,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +23,12 @@ import { MessageStatusIcon } from "@/components/conversations/message-status-ico
 import { MessageMedia } from "@/components/conversations/message-media";
 import { validateOutboundFile } from "@/lib/media";
 import { createVoiceRecorder } from "@/lib/voice-recorder";
+import { whatsappDeepLink } from "@/lib/conversations/phone-digits";
+import {
+  extractUrlFromBody,
+  formatRevokedMessage,
+  isSpecialNoticeType,
+} from "@/lib/ycloud/inbound-message-display";
 import type { MessageRow } from "@/lib/conversations/types";
 
 const EmojiPicker = dynamic(
@@ -59,6 +66,7 @@ export function MessageThread({
   onLoadOlder,
   canText,
   windowHint,
+  contactPhone,
   text,
   onTextChange,
   onSend,
@@ -83,6 +91,7 @@ export function MessageThread({
   onLoadOlder: () => void;
   canText: boolean;
   windowHint: string;
+  contactPhone?: string | null;
   text: string;
   onTextChange: (value: string) => void;
   onSend: () => void;
@@ -118,6 +127,7 @@ export function MessageThread({
   const [reactPickerId, setReactPickerId] = useState<string | null>(null);
   const firstMessageId = messages[0]?.id;
   const lastMessageId = messages[messages.length - 1]?.id;
+  const whatsappUrl = whatsappDeepLink(contactPhone);
 
   const byWamid = useMemo(() => {
     const map = new Map<string, MessageRow>();
@@ -321,6 +331,9 @@ export function MessageThread({
             <div className="flex flex-col gap-2.5">
               {messages.map((m) => {
                 const media = isMedia(m.type);
+                const notice = isSpecialNoticeType(m.type, m.body);
+                const interactiveUrl =
+                  m.type === "interactive" ? extractUrlFromBody(m.body) : null;
                 const quoted = m.reply_to_wamid
                   ? byWamid.get(m.reply_to_wamid)
                   : null;
@@ -328,6 +341,23 @@ export function MessageThread({
                 const ourReaction = reactions.find((r) => r.direction === "outbound");
                 const showMenu = menuMessageId === m.id;
                 const showReact = reactPickerId === m.id;
+
+                if (notice) {
+                  return (
+                    <div
+                      key={m.id}
+                      className="mx-auto max-w-[90%] rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-center text-xs text-[var(--muted)]"
+                    >
+                      {m.body || formatRevokedMessage()}
+                      <div className="mt-1 text-[10px] opacity-70">
+                        {new Date(m.created_at).toLocaleTimeString("es", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
+                    </div>
+                  );
+                }
 
                 return (
                   <div
@@ -380,6 +410,36 @@ export function MessageThread({
                             }
                           }}
                         />
+                      ) : m.type === "contacts" ? (
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                            Contacto
+                          </p>
+                          <div className="wa-text break-words whitespace-pre-wrap">
+                            <WhatsAppText text={m.body} />
+                          </div>
+                        </div>
+                      ) : m.type === "interactive" ? (
+                        <div className="space-y-2">
+                          <div className="wa-text break-words whitespace-pre-wrap">
+                            <WhatsAppText text={m.body} />
+                          </div>
+                          {interactiveUrl ? (
+                            <a
+                              href={interactiveUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
+                                m.direction === "outbound"
+                                  ? "border-white/40 text-white hover:bg-white/10"
+                                  : "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                              }`}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                              Abrir enlace
+                            </a>
+                          ) : null}
+                        </div>
                       ) : (
                         <div className="wa-text break-words whitespace-pre-wrap">
                           <WhatsAppText text={m.body} />
@@ -523,9 +583,26 @@ export function MessageThread({
           </div>
         ) : null}
         {!canText ? (
-          <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-            {windowHint}. WhatsApp solo permite mensajes libres dentro de las
-            24h desde el último mensaje entrante del contacto.
+          <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-900 dark:text-amber-100">
+            <p className="font-semibold">Ventana de 24h cerrada</p>
+            <p className="mt-1 opacity-90">
+              WhatsApp Business no permite enviar mensajes libres desde Sofia
+              Chat hasta que el contacto escriba de nuevo. Puedes iniciar la
+              conversación tú mismo abriendo el chat en WhatsApp.
+            </p>
+            {whatsappUrl ? (
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-[#25D366] px-3 py-1.5 text-xs font-semibold text-white hover:brightness-95"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Abrir en WhatsApp
+              </a>
+            ) : (
+              <p className="mt-2 opacity-80">{windowHint}</p>
+            )}
           </div>
         ) : null}
         {replyTo ? (

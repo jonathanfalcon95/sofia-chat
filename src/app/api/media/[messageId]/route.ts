@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { downloadYCloudMedia } from "@/lib/ycloud/client";
 import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@/lib/media";
+import { mediaContentDisposition } from "@/lib/ycloud/inbound-message-display";
 
 export const runtime = "nodejs";
 
@@ -16,13 +17,17 @@ function parseStorageRef(mediaUrl: string): { bucket: string; path: string } | n
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ messageId: string }> },
 ) {
   const { messageId } = await context.params;
   if (!messageId) {
     return NextResponse.json({ error: "missing_id" }, { status: 400 });
   }
+
+  const asAttachment =
+    new URL(request.url).searchParams.get("download") === "1" ||
+    new URL(request.url).searchParams.get("attachment") === "1";
 
   const supabase = await createClient();
   const {
@@ -57,6 +62,11 @@ export async function GET(
       ? (message.type as MediaKind)
       : "document");
   const maxBytes = maxBytesForKind(kind, true);
+  const disposition = mediaContentDisposition(
+    message.media_filename,
+    message.type,
+    asAttachment,
+  );
 
   try {
     const storageRef = parseStorageRef(message.media_url);
@@ -81,11 +91,7 @@ export async function GET(
           "Content-Type": message.media_mime || file.type || mimeHint,
           "Cache-Control": "private, max-age=300",
           "Content-Length": String(buf.byteLength),
-          ...(message.media_filename
-            ? {
-                "Content-Disposition": `inline; filename="${message.media_filename.replace(/"/g, "")}"`,
-              }
-            : {}),
+          "Content-Disposition": disposition,
         },
       });
     }
@@ -122,6 +128,7 @@ export async function GET(
       headers: {
         "Content-Type": contentType,
         "Cache-Control": "private, max-age=300",
+        "Content-Disposition": disposition,
         ...(contentLength
           ? { "Content-Length": String(contentLength) }
           : {}),

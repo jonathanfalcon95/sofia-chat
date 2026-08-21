@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, Mic, X } from "lucide-react";
+import { Download, FileText, Mic, X } from "lucide-react";
 import type { MessageRow } from "@/lib/conversations/types";
 import { takeMediaPreview } from "@/lib/media-preview-cache";
 
@@ -11,6 +11,11 @@ function mediaSrc(m: MessageRow) {
   if (cached) return cached;
   if (m.media_url) return `/api/media/${m.id}`;
   return null;
+}
+
+function downloadHref(m: MessageRow) {
+  if (!m.media_url || m.localPreviewUrl) return null;
+  return `/api/media/${m.id}?download=1`;
 }
 
 function MediaFallback({
@@ -33,6 +38,29 @@ function isPlainMediaLabel(body: string | null | undefined, type: string) {
   return labels.includes(body);
 }
 
+function DownloadLink({
+  href,
+  outbound,
+}: {
+  href: string;
+  outbound?: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      download
+      className={`mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium ${
+        outbound
+          ? "text-white/85 hover:bg-white/10"
+          : "text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+      }`}
+    >
+      <Download className="h-3 w-3" />
+      Descargar
+    </a>
+  );
+}
+
 export function MessageMedia({
   message: m,
   onContentReady,
@@ -43,6 +71,7 @@ export function MessageMedia({
   const [lightbox, setLightbox] = useState(false);
   const [failed, setFailed] = useState(false);
   const src = mediaSrc(m);
+  const dl = downloadHref(m);
   const type = m.type;
   const outbound = m.direction === "outbound";
 
@@ -78,6 +107,9 @@ export function MessageMedia({
         {type === "image" && !isPlainMediaLabel(m.body, type) ? (
           <div className="mt-1.5 px-1.5 text-sm leading-snug">{m.body}</div>
         ) : null}
+        {type === "image" && dl ? (
+          <DownloadLink href={dl} outbound={outbound} />
+        ) : null}
         {lightbox ? (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
@@ -93,13 +125,27 @@ export function MessageMedia({
             >
               <X className="h-5 w-5" />
             </button>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={src}
-              alt={m.body || "Imagen"}
-              className="max-h-[90vh] max-w-full object-contain"
+            <div
+              className="flex max-h-[90vh] max-w-full flex-col items-center gap-3"
               onClick={(e) => e.stopPropagation()}
-            />
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={src}
+                alt={m.body || "Imagen"}
+                className="max-h-[80vh] max-w-full object-contain"
+              />
+              {dl ? (
+                <a
+                  href={dl}
+                  download
+                  className="inline-flex items-center gap-2 rounded-lg bg-white/90 px-3 py-2 text-sm font-medium text-black"
+                >
+                  <Download className="h-4 w-4" />
+                  Descargar
+                </a>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </>
@@ -158,22 +204,25 @@ export function MessageMedia({
   if (type === "document") {
     const href = !failed ? src || undefined : undefined;
     return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        className={`inline-flex max-w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${
-          outbound ? "border-white/30 text-white" : "border-[var(--line)]"
-        } ${href ? "hover:underline" : "pointer-events-none opacity-70"}`}
-        onClick={(e) => {
-          if (!href) e.preventDefault();
-        }}
-      >
-        <FileText className="h-4 w-4 shrink-0" />
-        <span className="min-w-0 truncate">
-          {m.media_filename || m.body || "Documento"}
-        </span>
-      </a>
+      <div className="flex flex-col items-start gap-1">
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className={`inline-flex max-w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${
+            outbound ? "border-white/30 text-white" : "border-[var(--line)]"
+          } ${href ? "hover:underline" : "pointer-events-none opacity-70"}`}
+          onClick={(e) => {
+            if (!href) e.preventDefault();
+          }}
+        >
+          <FileText className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 truncate">
+            {m.media_filename || m.body || "Documento"}
+          </span>
+        </a>
+        {dl ? <DownloadLink href={dl} outbound={outbound} /> : null}
+      </div>
     );
   }
 

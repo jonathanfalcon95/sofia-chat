@@ -8,3 +8,13 @@ export function normalizePhoneDigits(phone: string): string {
   }
   return value.replace(/\D/g, "");
 }
+
+/** Opens the contact chat in the WhatsApp app/web. */
+export function whatsappDeepLink(
+  phone: string | null | undefined,
+): string | null {
+  if (!phone) return null;
+  const digits = normalizePhoneDigits(phone);
+  if (!digits) return null;
+  return `https://wa.me/${digits}`;
+}

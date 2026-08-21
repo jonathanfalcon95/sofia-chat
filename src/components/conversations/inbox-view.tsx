@@ -1714,6 +1714,7 @@ export function InboxView({
                 onLoadOlder={() => void loadOlderMessages()}
                 canText={canText}
                 windowHint={windowHint}
+                contactPhone={active.contacts?.phone_number}
                 text={text}
                 onTextChange={setText}
                 onSend={() => sendTextOptimistic()}
