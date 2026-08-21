@@ -20,11 +20,33 @@ export function appendConversationListPage(
   return [...prev, ...appended];
 }
 
-/** Put a deep-linked chat at the front of the list even if it is outside the first page. */
+/**
+ * Ensure a deep-linked chat is in the list without jumping already-visible rows.
+ * - If present: update fields in place (preserve order).
+ * - If missing: insert by last_message_at desc so the list stays sorted.
+ */
 export function upsertConversationInList(
   list: ConversationRow[],
   row: ConversationRow,
 ): ConversationRow[] {
-  const rest = list.filter((c) => c.id !== row.id);
-  return [row, ...rest];
+  const idx = list.findIndex((c) => c.id === row.id);
+  if (idx >= 0) {
+    const next = list.slice();
+    next[idx] = { ...list[idx], ...row };
+    return next;
+  }
+
+  const rowTime = row.last_message_at
+    ? Date.parse(row.last_message_at)
+    : Number.NEGATIVE_INFINITY;
+  let insertAt = list.findIndex((c) => {
+    const t = c.last_message_at
+      ? Date.parse(c.last_message_at)
+      : Number.NEGATIVE_INFINITY;
+    return t < rowTime;
+  });
+  if (insertAt < 0) insertAt = list.length;
+  const next = list.slice();
+  next.splice(insertAt, 0, row);
+  return next;
 }
