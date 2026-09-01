@@ -195,6 +195,8 @@ export function InboxView({
   const [threadMissing, setThreadMissing] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const desktopRedirectRef = useRef(false);
+  /** User picked another company while a thread from a different one was open. */
+  const ignoreRouteCompanySyncRef = useRef(false);
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const notesLoadingForIdRef = useRef<string | null>(null);
   const routeFetchRef = useRef<string | null>(null);
@@ -239,6 +241,9 @@ export function InboxView({
   useEffect(() => {
     setThreadMissing(false);
     routeFetchRef.current = null;
+    if (!routeId) {
+      ignoreRouteCompanySyncRef.current = false;
+    }
   }, [routeId]);
 
   useEffect(() => {
@@ -332,11 +337,16 @@ export function InboxView({
   function onCompanySelect(nextId: string) {
     const activeCompany = conversations.find((c) => c.id === activeId)
       ?.company_id;
-    persistCompanyId(nextId);
     if (activeId && activeCompany && activeCompany !== nextId) {
+      // Prevent deep-link sync from snapping companyId back to the open thread
+      // before router.replace clears /conversations/[id].
+      ignoreRouteCompanySyncRef.current = true;
       desktopRedirectRef.current = false;
+      persistCompanyId(nextId);
       router.replace("/conversations", { scroll: false });
+      return;
     }
+    persistCompanyId(nextId);
   }
 
   function resizeComposer() {
@@ -392,11 +402,16 @@ export function InboxView({
   // Deep-link / direct URL: if the thread isn't in the loaded page, fetch it.
   useEffect(() => {
     if (!routeId || !storageChecked) return;
+    // Company switch in progress: leave the URL; don't re-bind company to this thread.
+    if (ignoreRouteCompanySyncRef.current) return;
     const inList = conversations.find((c) => c.id === routeId);
     if (inList) {
       routeFetchRef.current = null;
       setThreadMissing(false);
-      if (showCompanyFilter && inList.company_id !== companyId) {
+      if (
+        showCompanyFilter &&
+        inList.company_id !== filtersRef.current.companyId
+      ) {
         persistCompanyId(inList.company_id);
       }
       return;
@@ -411,7 +426,7 @@ export function InboxView({
       try {
         const supabase = createClient();
         const row = await fetchConversationById(supabase, routeId);
-        if (cancelled) return;
+        if (cancelled || ignoreRouteCompanySyncRef.current) return;
         if (!row) {
           setThreadMissing(true);
           return;
@@ -439,7 +454,6 @@ export function InboxView({
     conversations,
     storageChecked,
     showCompanyFilter,
-    companyId,
     persistCompanyId,
   ]);
 
@@ -820,7 +834,11 @@ export function InboxView({
         const row = payload.conversation;
         setThreadMissing(false);
         setConversations((prev) => upsertConversationInList(prev, row));
+        // Only align company to the thread the user is still viewing — never
+        // override an intentional company switch while leaving that thread.
         if (
+          payload.conversationId === activeIdRef.current &&
+          !ignoreRouteCompanySyncRef.current &&
           row.company_id &&
           row.company_id !== filtersRef.current.companyId
         ) {
