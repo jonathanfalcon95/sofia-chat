@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { isSafeNextPath } from "@/lib/auth/safe-next-path";
@@ -12,7 +11,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function LoginForm({ next }: { next?: string }) {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -39,8 +37,11 @@ export function LoginForm({ next }: { next?: string }) {
       return;
     }
 
-    // Land on a deep-linked chat so SSR can paint the thread immediately
-    // (avoids /conversations → /conversations/[id] skeleton flicker).
+    // Ensure auth cookies are persisted before the server renders the inbox.
+    await supabase.auth.getSession();
+
+    // Full navigation (not router.replace) so the first SSR request includes
+    // the fresh session — soft navigation caused intermittent server errors.
     const { data: firstChat } = await supabase
       .from("conversations")
       .select("id")
@@ -48,10 +49,10 @@ export function LoginForm({ next }: { next?: string }) {
       .limit(1)
       .maybeSingle();
 
-    router.replace(
-      firstChat?.id ? `/conversations/${firstChat.id}` : "/conversations",
-    );
-    router.refresh();
+    const destination = firstChat?.id
+      ? `/conversations/${firstChat.id}`
+      : "/conversations";
+    window.location.assign(destination);
   }
 
   return (

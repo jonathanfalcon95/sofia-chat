@@ -39,17 +39,18 @@ export async function loadInboxListData() {
     ? (preferredCompanyId ?? companyList[0]?.id ?? "")
     : "";
 
-  const [
-    listPage,
-    agents,
-    { data: tags },
-    { data: contactTags },
-  ] = await Promise.all([
-    showCompanyFilter && !initialCompanyId
-      ? Promise.resolve({ conversations: [], hasMore: false })
-      : fetchConversationListPage(supabase, {
-          companyId: initialCompanyId || undefined,
-        }),
+  let listPage = { conversations: [] as ConversationRow[], hasMore: false };
+  if (!(showCompanyFilter && !initialCompanyId)) {
+    try {
+      listPage = await fetchConversationListPage(supabase, {
+        companyId: initialCompanyId || undefined,
+      });
+    } catch (err) {
+      console.error("[inbox] conversation list bootstrap failed", err);
+    }
+  }
+
+  const [agents, { data: tags }, { data: contactTags }] = await Promise.all([
     listCompanyAgents(),
     supabase
       .from("tags")
