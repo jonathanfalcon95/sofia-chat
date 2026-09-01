@@ -34,15 +34,15 @@ export function sessionShowsAssignedCompanies(session: AppSession) {
 
 export const getAppSession = cache(async (): Promise<AppSession | null> => {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+  const { data: claimsData, error: claimsError } =
+    await supabase.auth.getClaims();
+  const userId = claimsData?.claims?.sub;
+  if (claimsError || !userId) return null;
 
   const { data: profile } = await supabase
     .from("profiles")
     .select("id, email, full_name, is_platform_admin")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   if (!profile) return null;
@@ -63,7 +63,7 @@ export const getAppSession = cache(async (): Promise<AppSession | null> => {
       membership_inboxes ( inbox_id )
     `,
     )
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("is_active", true);
 
   const mapped =

@@ -35,7 +35,7 @@ export async function updateSession(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet, headers) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value),
           );
@@ -43,14 +43,18 @@ export async function updateSession(request: NextRequest) {
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options),
           );
+          Object.entries(headers).forEach(([key, value]) =>
+            supabaseResponse.headers.set(key, value),
+          );
         },
       },
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // getClaims validates/refreshes the session locally (JWKS) instead of calling
+  // Auth on every request — getUser() was timing out middleware on Vercel.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const userId = claimsData?.claims?.sub;
 
   const path = request.nextUrl.pathname;
   const isAuthPage = path.startsWith("/login");
@@ -59,7 +63,7 @@ export async function updateSession(request: NextRequest) {
     path.startsWith("/api/webhooks") ||
     path.startsWith("/auth");
 
-  if (!user && !isPublic) {
+  if (!userId && !isPublic) {
     const loginPath = loginUrlWithNext(path, request.nextUrl.search);
     return redirectPreservingCookies(
       supabaseResponse,
@@ -67,7 +71,7 @@ export async function updateSession(request: NextRequest) {
     );
   }
 
-  if (user && isAuthPage) {
+  if (userId && isAuthPage) {
     const next = request.nextUrl.searchParams.get("next");
     const destination = isSafeNextPath(next) ? next : "/conversations";
     return redirectPreservingCookies(
