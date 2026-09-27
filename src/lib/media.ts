@@ -95,9 +95,21 @@ export function extractInboundMedia(msg: Record<string, unknown>): {
 
   const block = msg[type] as Record<string, unknown> | undefined;
   if (!block || typeof block !== "object") {
+    const defaultLabel =
+      type === "audio"
+        ? "Nota de voz"
+        : type === "image"
+          ? "Imagen"
+          : type === "video"
+            ? "Video"
+            : type === "sticker"
+              ? "Sticker"
+              : type === "document"
+                ? "Documento"
+                : `[${type}]`;
     return {
       type: type as MediaKind,
-      body: `[${type}]`,
+      body: defaultLabel,
       mediaUrl: null,
       mediaMime: null,
       mediaFilename: null,

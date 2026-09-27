@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Loader2,
+  MapPin,
   Mic,
   Paperclip,
   Reply,
@@ -28,8 +29,11 @@ import {
   extractUrlFromBody,
   formatRevokedMessage,
   isSpecialNoticeType,
+  sanitizeMessageBody,
 } from "@/lib/ycloud/inbound-message-display";
+import { groupMessagesByDay } from "@/lib/conversations/day-grouping";
 import type { MessageRow } from "@/lib/conversations/types";
+import type { SofiaControlAction } from "@/components/conversations/sofia-commands-help";
 
 const EmojiPicker = dynamic(
   () =>
@@ -70,7 +74,8 @@ export function MessageThread({
   text,
   onTextChange,
   onSend,
-  onSendCommand,
+  onSofiaAction,
+  sofiaPending = null,
   onSendMedia,
   mediaSending,
   onComposerKeyDown,
@@ -82,6 +87,7 @@ export function MessageThread({
   onReplyTo,
   onReact,
   sofiaStoppedAll = false,
+  sofiaChatPaused = false,
 }: {
   activeConversationId: string;
   messages: MessageRow[];
@@ -95,7 +101,8 @@ export function MessageThread({
   text: string;
   onTextChange: (value: string) => void;
   onSend: () => void;
-  onSendCommand: (command: string) => void;
+  onSofiaAction: (action: SofiaControlAction) => void;
+  sofiaPending?: SofiaControlAction | null;
   onSendMedia: (file: File, caption?: string) => Promise<void>;
   mediaSending: boolean;
   onComposerKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -107,6 +114,7 @@ export function MessageThread({
   onReplyTo: (message: MessageRow | null) => void;
   onReact: (message: MessageRow, emoji: string) => void;
   sofiaStoppedAll?: boolean;
+  sofiaChatPaused?: boolean;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -283,14 +291,36 @@ export function MessageThread({
     recordSecs % 60,
   ).padStart(2, "0")}`;
 
+  const dayGroups = useMemo(() => groupMessagesByDay(messages), [messages]);
+
+  function parseLocationLink(body: string | null | undefined): string | null {
+    if (!body) return null;
+    const match = body.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+    if (match) {
+      return `https://www.google.com/maps/search/?api=1&query=${match[1]},${match[2]}`;
+    }
+    const clean = body.replace(/^[📍\s]+/, "").trim();
+    if (clean && clean !== "Ubicación compartida" && clean !== "Ubicación") {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(clean)}`;
+    }
+    return null;
+  }
+
   function quotedPreview(m: MessageRow) {
-    if (m.type === "image") return m.body?.trim() ? `📷 ${m.body}` : "📷 Imagen";
-    if (m.type === "video") return m.body?.trim() ? `🎬 ${m.body}` : "🎬 Video";
+    if (m.type === "image")
+      return m.body?.trim() ? `📷 ${sanitizeMessageBody(m.body, m.type)}` : "📷 Imagen";
+    if (m.type === "video")
+      return m.body?.trim() ? `🎬 ${sanitizeMessageBody(m.body, m.type)}` : "🎬 Video";
     if (m.type === "audio") return "🎤 Nota de voz";
     if (m.type === "document")
-      return `📄 ${m.media_filename || m.body || "Documento"}`;
+      return `📄 ${m.media_filename || sanitizeMessageBody(m.body, m.type) || "Documento"}`;
     if (m.type === "sticker") return "Sticker";
-    return (m.body || m.template_name || m.type || "Mensaje").slice(0, 120);
+    if (m.type === "location")
+      return `📍 ${sanitizeMessageBody(m.body, m.type)}`;
+    return sanitizeMessageBody(
+      m.body || m.template_name || m.type || "Mensaje",
+      m.type,
+    ).slice(0, 120);
   }
 
   return (
@@ -328,240 +358,277 @@ export function MessageThread({
                 </Button>
               </div>
             ) : null}
-            <div className="flex flex-col gap-2.5">
-              {messages.map((m) => {
-                const media = isMedia(m.type);
-                const notice = isSpecialNoticeType(m.type, m.body);
-                const interactiveUrl =
-                  m.type === "interactive" ? extractUrlFromBody(m.body) : null;
-                const quoted = m.reply_to_wamid
-                  ? byWamid.get(m.reply_to_wamid)
-                  : null;
-                const reactions = Array.isArray(m.reactions) ? m.reactions : [];
-                const ourReaction = reactions.find((r) => r.direction === "outbound");
-                const showMenu = menuMessageId === m.id;
-                const showReact = reactPickerId === m.id;
+            <div className="flex flex-col gap-4">
+              {dayGroups.map((group) => (
+                <div key={group.dayKey} className="relative flex flex-col gap-2.5">
+                  <div className="sticky top-2 z-10 flex justify-center py-1 pointer-events-none">
+                    <span className="pointer-events-auto rounded-lg border border-[var(--line)] bg-[var(--surface-2)]/90 px-3 py-1 text-[11px] font-medium text-[var(--muted)] shadow-xs backdrop-blur-sm select-none">
+                      {group.dayLabel}
+                    </span>
+                  </div>
+                  {group.messages.map((m) => {
+                    const media = isMedia(m.type);
+                    const notice = isSpecialNoticeType(m.type, m.body);
+                    const interactiveUrl =
+                      m.type === "interactive" ? extractUrlFromBody(m.body) : null;
+                    const quoted = m.reply_to_wamid
+                      ? byWamid.get(m.reply_to_wamid)
+                      : null;
+                    const reactions = Array.isArray(m.reactions) ? m.reactions : [];
+                    const ourReaction = reactions.find((r) => r.direction === "outbound");
+                    const showMenu = menuMessageId === m.id;
+                    const showReact = reactPickerId === m.id;
 
-                if (notice) {
-                  return (
-                    <div
-                      key={m.id}
-                      className="mx-auto max-w-[90%] rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-center text-xs text-[var(--muted)]"
-                    >
-                      {m.body || formatRevokedMessage()}
-                      <div className="mt-1 text-[10px] opacity-70">
-                        {new Date(m.created_at).toLocaleTimeString("es", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div
-                    key={m.id}
-                    className={`group relative flex flex-col ${
-                      m.direction === "outbound" ? "items-end" : "items-start"
-                    }`}
-                    onMouseLeave={() => {
-                      if (menuMessageId === m.id) setMenuMessageId(null);
-                      if (reactPickerId === m.id) setReactPickerId(null);
-                    }}
-                  >
-                    <div
-                      className={`msg-bubble text-[14.5px] leading-[1.4] ${
-                        media
-                          ? `msg-bubble-media ${
-                              m.type === "audio"
-                                ? "msg-bubble-audio"
-                                : m.type === "document"
-                                  ? "msg-bubble-doc"
-                                  : m.type === "sticker"
-                                    ? "msg-bubble-sticker"
-                                    : ""
-                            }`
-                          : "px-3 py-2"
-                      } ${m.direction === "outbound" ? "msg-out" : "msg-in"}`}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setMenuMessageId(m.id);
-                        setReactPickerId(null);
-                      }}
-                    >
-                      {m.reply_to_wamid ? (
+                    if (notice) {
+                      return (
                         <div
-                          className={`mb-1.5 rounded-md border-l-2 px-2 py-1 text-[12px] ${
-                            m.direction === "outbound"
-                              ? "border-white/50 bg-black/10 text-white/85"
-                              : "border-[var(--accent)] bg-[var(--surface-2)] text-[var(--muted)]"
-                          }`}
+                          key={m.id}
+                          className="mx-auto max-w-[90%] rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-center text-xs text-[var(--muted)]"
                         >
-                          {quoted ? quotedPreview(quoted) : "Mensaje citado"}
+                          {sanitizeMessageBody(m.body, m.type) || formatRevokedMessage()}
+                          <div className="mt-1 text-[10px] opacity-70">
+                            {new Date(m.created_at).toLocaleTimeString("es", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </div>
                         </div>
-                      ) : null}
-                      {media ? (
-                        <MessageMedia
-                          message={m}
-                          onContentReady={() => {
-                            if (stickToBottomRef.current) {
-                              requestAnimationFrame(() => scrollToBottom());
-                            }
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={m.id}
+                        className={`group relative flex flex-col ${
+                          m.direction === "outbound" ? "items-end" : "items-start"
+                        }`}
+                        onMouseLeave={() => {
+                          if (menuMessageId === m.id) setMenuMessageId(null);
+                          if (reactPickerId === m.id) setReactPickerId(null);
+                        }}
+                      >
+                        <div
+                          className={`msg-bubble text-[14.5px] leading-[1.4] ${
+                            media
+                              ? `msg-bubble-media ${
+                                  m.type === "audio"
+                                    ? "msg-bubble-audio"
+                                    : m.type === "document"
+                                      ? "msg-bubble-doc"
+                                      : m.type === "sticker"
+                                        ? "msg-bubble-sticker"
+                                        : ""
+                                }`
+                              : "px-3 py-2"
+                          } ${m.direction === "outbound" ? "msg-out" : "msg-in"}`}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setMenuMessageId(m.id);
+                            setReactPickerId(null);
                           }}
-                        />
-                      ) : m.type === "contacts" ? (
-                        <div className="space-y-1">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
-                            Contacto
-                          </p>
-                          <div className="wa-text break-words whitespace-pre-wrap">
-                            <WhatsAppText text={m.body} />
-                          </div>
-                        </div>
-                      ) : m.type === "interactive" ? (
-                        <div className="space-y-2">
-                          <div className="wa-text break-words whitespace-pre-wrap">
-                            <WhatsAppText text={m.body} />
-                          </div>
-                          {interactiveUrl ? (
-                            <a
-                              href={interactiveUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
+                        >
+                          {m.reply_to_wamid ? (
+                            <div
+                              className={`mb-1.5 rounded-md border-l-2 px-2 py-1 text-[12px] ${
                                 m.direction === "outbound"
-                                  ? "border-white/40 text-white hover:bg-white/10"
-                                  : "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                                  ? "border-white/50 bg-black/10 text-white/85"
+                                  : "border-[var(--accent)] bg-[var(--surface-2)] text-[var(--muted)]"
                               }`}
                             >
-                              <ExternalLink className="h-3 w-3" />
-                              Abrir enlace
-                            </a>
+                              {quoted ? quotedPreview(quoted) : "Mensaje citado"}
+                            </div>
                           ) : null}
-                        </div>
-                      ) : (
-                        <div className="wa-text break-words whitespace-pre-wrap">
-                          <WhatsAppText text={m.body} />
-                        </div>
-                      )}
-                      <div
-                        className={`mt-1 flex items-center justify-end gap-1 px-1 text-[10px] leading-none ${
-                          m.direction === "outbound"
-                            ? "text-white/70"
-                            : "text-[var(--muted)]"
-                        } ${m.type === "sticker" ? "px-0 text-[var(--muted)]" : ""}`}
-                      >
-                        <span>
-                          {new Date(m.created_at).toLocaleTimeString("es", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </span>
-                        {m.template_name ? (
-                          <span>· {m.template_name}</span>
-                        ) : null}
-                        {m.direction === "outbound" ? (
-                          <MessageStatusIcon status={m.status} />
-                        ) : null}
-                      </div>
-                    </div>
-
-                    {reactions.length > 0 ? (
-                      <div className="mt-1 flex flex-wrap gap-1 px-1">
-                        {Object.entries(
-                          reactions.reduce<Record<string, number>>((acc, r) => {
-                            acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
-                            return acc;
-                          }, {}),
-                        ).map(([emoji, count]) => (
-                          <button
-                            key={emoji}
-                            type="button"
-                            disabled={!canText}
-                            onClick={() => {
-                              if (ourReaction?.emoji === emoji) {
-                                onReact(m, "");
-                              } else {
-                                onReact(m, emoji);
-                              }
-                            }}
-                            className={`rounded-full border px-1.5 py-0.5 text-xs ${
-                              ourReaction?.emoji === emoji
-                                ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                                : "border-[var(--line)] bg-[var(--surface)]"
-                            }`}
+                          {media ? (
+                            <MessageMedia
+                              message={m}
+                              onContentReady={() => {
+                                if (stickToBottomRef.current) {
+                                  requestAnimationFrame(() => scrollToBottom());
+                                }
+                              }}
+                            />
+                          ) : m.type === "contacts" ? (
+                            <div className="space-y-1">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                                Contacto
+                              </p>
+                              <div className="wa-text break-words whitespace-pre-wrap">
+                                <WhatsAppText text={sanitizeMessageBody(m.body, m.type)} />
+                              </div>
+                            </div>
+                          ) : m.type === "interactive" ? (
+                            <div className="space-y-2">
+                              <div className="wa-text break-words whitespace-pre-wrap">
+                                <WhatsAppText text={sanitizeMessageBody(m.body, m.type)} />
+                              </div>
+                              {interactiveUrl ? (
+                                <a
+                                  href={interactiveUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
+                                    m.direction === "outbound"
+                                      ? "border-white/40 text-white hover:bg-white/10"
+                                      : "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                                  }`}
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                  Abrir enlace
+                                </a>
+                              ) : null}
+                            </div>
+                          ) : m.type === "location" ? (
+                            <div className="space-y-2">
+                              <div className="flex items-start gap-2">
+                                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                                <div className="wa-text break-words whitespace-pre-wrap">
+                                  <WhatsAppText text={sanitizeMessageBody(m.body, m.type)} />
+                                </div>
+                              </div>
+                              {(() => {
+                                const mapUrl = parseLocationLink(m.body);
+                                if (!mapUrl) return null;
+                                return (
+                                  <a
+                                    href={mapUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
+                                      m.direction === "outbound"
+                                        ? "border-white/40 text-white hover:bg-white/10"
+                                        : "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                                    }`}
+                                  >
+                                    <ExternalLink className="h-3 w-3" />
+                                    Ver en Google Maps
+                                  </a>
+                                );
+                              })()}
+                            </div>
+                          ) : (
+                            <div className="wa-text break-words whitespace-pre-wrap">
+                              <WhatsAppText text={sanitizeMessageBody(m.body, m.type)} />
+                            </div>
+                          )}
+                          <div
+                            className={`mt-1 flex items-center justify-end gap-1 px-1 text-[10px] leading-none ${
+                              m.direction === "outbound"
+                                ? "text-white/70"
+                                : "text-[var(--muted)]"
+                            } ${m.type === "sticker" ? "px-0 text-[var(--muted)]" : ""}`}
                           >
-                            {emoji}
-                            {count > 1 ? ` ${count}` : ""}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
+                            <span>
+                              {new Date(m.created_at).toLocaleTimeString("es", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            {m.template_name ? (
+                              <span>· {m.template_name}</span>
+                            ) : null}
+                            {m.direction === "outbound" ? (
+                              <MessageStatusIcon status={m.status} />
+                            ) : null}
+                          </div>
+                        </div>
 
-                    <div
-                      className={`mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 ${
-                        showMenu || showReact ? "opacity-100" : ""
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        disabled={!canText || !messageWamid(m)}
-                        title={
-                          messageWamid(m)
-                            ? "Responder"
-                            : "Espera a que WhatsApp asigne wamid"
-                        }
-                        className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
-                        onClick={() => {
-                          if (!messageWamid(m)) return;
-                          onReplyTo(m);
-                          setMenuMessageId(null);
-                          composerRef.current?.focus();
-                        }}
-                      >
-                        <Reply className="h-3 w-3" />
-                        Responder
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!canText || !messageWamid(m)}
-                        title={
-                          messageWamid(m)
-                            ? "Reaccionar"
-                            : "Espera a que WhatsApp asigne wamid"
-                        }
-                        className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
-                        onClick={() => {
-                          setReactPickerId((id) => (id === m.id ? null : m.id));
-                          setMenuMessageId(null);
-                        }}
-                      >
-                        <SmilePlus className="h-3 w-3" />
-                        Reaccionar
-                      </button>
-                    </div>
+                        {reactions.length > 0 ? (
+                          <div className="mt-1 flex flex-wrap gap-1 px-1">
+                            {Object.entries(
+                              reactions.reduce<Record<string, number>>((acc, r) => {
+                                acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
+                                return acc;
+                              }, {}),
+                            ).map(([emoji, count]) => (
+                              <button
+                                key={emoji}
+                                type="button"
+                                disabled={!canText}
+                                onClick={() => {
+                                  if (ourReaction?.emoji === emoji) {
+                                    onReact(m, "");
+                                  } else {
+                                    onReact(m, emoji);
+                                  }
+                                }}
+                                className={`rounded-full border px-1.5 py-0.5 text-xs ${
+                                  ourReaction?.emoji === emoji
+                                    ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                                    : "border-[var(--line)] bg-[var(--surface)]"
+                                }`}
+                              >
+                                {emoji}
+                                {count > 1 ? ` ${count}` : ""}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
 
-                    {showReact ? (
-                      <div className="mt-1 flex gap-1 rounded-full border border-[var(--line)] bg-[var(--surface)] p-1 shadow-sm">
-                        {REACTION_SET.map((emoji) => (
+                        <div
+                          className={`mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 ${
+                            showMenu || showReact ? "opacity-100" : ""
+                          }`}
+                        >
                           <button
-                            key={emoji}
                             type="button"
-                            className="h-8 w-8 rounded-full text-base hover:bg-[var(--accent-soft)]"
+                            disabled={!canText || !messageWamid(m)}
+                            title={
+                              messageWamid(m)
+                                ? "Responder"
+                                : "Espera a que WhatsApp asigne wamid"
+                            }
+                            className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
                             onClick={() => {
-                              onReact(m, emoji);
-                              setReactPickerId(null);
+                              if (!messageWamid(m)) return;
+                              onReplyTo(m);
+                              setMenuMessageId(null);
+                              composerRef.current?.focus();
                             }}
                           >
-                            {emoji}
+                            <Reply className="h-3 w-3" />
+                            Responder
                           </button>
-                        ))}
+                          <button
+                            type="button"
+                            disabled={!canText || !messageWamid(m)}
+                            title={
+                              messageWamid(m)
+                                ? "Reaccionar"
+                                : "Espera a que WhatsApp asigne wamid"
+                            }
+                            className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
+                            onClick={() => {
+                              setReactPickerId((id) => (id === m.id ? null : m.id));
+                              setMenuMessageId(null);
+                            }}
+                          >
+                            <SmilePlus className="h-3 w-3" />
+                            Reaccionar
+                          </button>
+                        </div>
+
+                        {showReact ? (
+                          <div className="mt-1 flex gap-1 rounded-full border border-[var(--line)] bg-[var(--surface)] p-1 shadow-sm">
+                            {REACTION_SET.map((emoji) => (
+                              <button
+                                key={emoji}
+                                type="button"
+                                className="h-8 w-8 rounded-full text-base hover:bg-[var(--accent-soft)]"
+                                onClick={() => {
+                                  onReact(m, emoji);
+                                  setReactPickerId(null);
+                                }}
+                              >
+                                {emoji}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              ))}
               <div ref={bottomRef} aria-hidden className="h-px w-full" />
             </div>
           </>
@@ -573,11 +640,22 @@ export function MessageThread({
           <div className="mb-2 flex gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
             <div>
-              <p className="font-semibold">Sofia está pausada globalmente</p>
+              <p className="font-semibold">Sofia está pausada en toda la línea</p>
               <p className="mt-0.5 opacity-90">
-                No responderá en ningún chat. Usa{" "}
-                <code className="font-mono font-semibold">/startsofia_all</code>{" "}
-                (botón de ayuda) para reactivarla.
+                No responderá en ningún chat de este número. Usa{" "}
+                <span className="font-semibold">Reanudar todos</span> en los
+                controles de Sofia.
+              </p>
+            </div>
+          </div>
+        ) : sofiaChatPaused ? (
+          <div className="mb-2 flex gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <p className="font-semibold">Sofia está pausada en este chat</p>
+              <p className="mt-0.5 opacity-90">
+                Usa <span className="font-semibold">Reanudar chat</span> en los
+                controles de Sofia para activarla aquí.
               </p>
             </div>
           </div>
@@ -656,9 +734,10 @@ export function MessageThread({
             onPick={onInsertEmoji}
           />
           <SofiaCommandsHelp
-            disabled={!canText || mediaSending || recording}
-            onSelect={onSendCommand}
+            pending={sofiaPending}
+            onAction={onSofiaAction}
             sofiaStoppedAll={sofiaStoppedAll}
+            chatPaused={sofiaChatPaused}
           />
           <input
             ref={fileInputRef}
@@ -740,7 +819,7 @@ export function MessageThread({
         </div>
         {canText && !recording ? (
           <p className="mt-1.5 text-[10px] text-[var(--muted)]">
-            Enter envía · Shift+Enter salto · ? comandos Sofia · micrófono nota
+            Enter envía · Shift+Enter salto · controles Sofia · micrófono nota
             de voz · clip imagen/PDF
           </p>
         ) : null}

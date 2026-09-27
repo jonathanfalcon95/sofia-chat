@@ -72,6 +72,87 @@ export function formatRevokedMessage(): string {
   return "Mensaje eliminado";
 }
 
+export type LocationDetails = {
+  latitude: number | null;
+  longitude: number | null;
+  name: string | null;
+  address: string | null;
+  url: string | null;
+};
+
+export function extractLocationDetails(raw: Json): LocationDetails | null {
+  const loc = asObj(raw?.location);
+  if (!loc) return null;
+  const latNum = typeof loc.latitude === "number" ? loc.latitude : Number(loc.latitude);
+  const lngNum = typeof loc.longitude === "number" ? loc.longitude : Number(loc.longitude);
+  const latitude = !Number.isNaN(latNum) && loc.latitude != null ? latNum : null;
+  const longitude = !Number.isNaN(lngNum) && loc.longitude != null ? lngNum : null;
+  return {
+    latitude,
+    longitude,
+    name: asStr(loc.name),
+    address: asStr(loc.address),
+    url: asStr(loc.url),
+  };
+}
+
+export function formatLocationMessage(raw: Json): string {
+  const loc = extractLocationDetails(raw);
+  if (!loc) return "📍 Ubicación compartida";
+  if (loc.name && loc.address) return `📍 ${loc.name}\n${loc.address}`;
+  if (loc.name) return `📍 ${loc.name}`;
+  if (loc.address) return `📍 ${loc.address}`;
+  if (loc.latitude != null && loc.longitude != null) {
+    return `📍 Ubicación: ${loc.latitude}, ${loc.longitude}`;
+  }
+  return "📍 Ubicación compartida";
+}
+
+export function formatOrderMessage(raw: Json): string {
+  const order = asObj(raw?.order);
+  const text = asStr(order?.text);
+  if (text) return text;
+  const items = Array.isArray(order?.product_items) ? order.product_items : [];
+  if (items.length > 0) {
+    return `🛒 Pedido de catálogo (${items.length} artículo${items.length > 1 ? "s" : ""})`;
+  }
+  return "🛒 Pedido de catálogo";
+}
+
+export const PLACEHOLDER_LABELS: Record<string, string> = {
+  image: "Imagen",
+  audio: "Nota de voz",
+  video: "Video",
+  document: "Documento",
+  sticker: "Sticker",
+  interactive: "Mensaje interactivo",
+  location: "Ubicación",
+  contacts: "Contacto compartido",
+  order: "Pedido",
+  button: "Botón",
+  system: "Mensaje del sistema",
+  template: "Plantilla",
+  reaction: "Reacción",
+  unsupported: "Mensaje no disponible",
+};
+
+export function sanitizeMessageBody(
+  body: string | null | undefined,
+  type?: string | null,
+): string {
+  if (!body || !body.trim()) {
+    const key = (type ?? "").trim().toLowerCase();
+    return PLACEHOLDER_LABELS[key] || "Mensaje";
+  }
+  const trimmed = body.trim();
+  const match = trimmed.match(/^\[([a-z_0-9]+)\]$/i);
+  if (match) {
+    const key = match[1].toLowerCase();
+    return PLACEHOLDER_LABELS[key] || key.charAt(0).toUpperCase() + key.slice(1);
+  }
+  return trimmed;
+}
+
 /** Body/type/media extracted from an edit.message object. */
 export function extractEditedMessage(editMessage: unknown): {
   type: string;
@@ -134,9 +215,13 @@ export function buildInboundBody(
       const edit = asObj(raw?.edit);
       return extractEditedMessage(edit?.message).body;
     }
+    case "location":
+      return formatLocationMessage(raw);
+    case "order":
+      return formatOrderMessage(raw);
     default: {
       const text = asStr(asObj(raw?.text)?.body) || asStr(raw?.caption);
-      return text || `[${type}]`;
+      return text || sanitizeMessageBody(null, type);
     }
   }
 }

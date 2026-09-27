@@ -32,6 +32,7 @@ import {
   rememberMediaPreview,
   takeMediaPreview,
 } from "@/lib/media-preview-cache";
+import { sanitizeMessageBody } from "@/lib/ycloud/inbound-message-display";
 import {
   PRIORITY_LABELS,
   TICKET_PRIORITIES,
@@ -86,10 +87,26 @@ import {
   syncSofiaStoppedAllFromCommand,
   writeSofiaStoppedAll,
 } from "@/lib/conversations/sofia-status";
+import type { SofiaControlAction } from "@/components/conversations/sofia-commands-help";
 import {
   INBOX_COMPANY_STORAGE_KEY,
   writeInboxCompanyCookie,
 } from "@/lib/conversations/inbox-company-preference";
+
+async function fetchSofiaStatus(conversationId: string) {
+  try {
+    const res = await fetch(
+      `/api/sofia/status?conversationId=${encodeURIComponent(conversationId)}`,
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as {
+      linePaused?: boolean;
+      chatPaused?: boolean;
+    };
+  } catch {
+    return null;
+  }
+}
 
 const ConversationSidePanel = dynamic(
   () =>
@@ -191,6 +208,10 @@ export function InboxView({
   const [mediaSending, setMediaSending] = useState(false);
   const [replyTo, setReplyTo] = useState<MessageRow | null>(null);
   const [sofiaStoppedAll, setSofiaStoppedAll] = useState(false);
+  const [sofiaChatPaused, setSofiaChatPaused] = useState(false);
+  const [sofiaPending, setSofiaPending] = useState<SofiaControlAction | null>(
+    null,
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [threadMissing, setThreadMissing] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -258,22 +279,20 @@ export function InboxView({
   }, []);
 
   useEffect(() => {
-    let found: boolean | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const body = messages[i]?.body?.trim();
-      if (body === "/stopsofia_all") {
-        found = true;
-        break;
-      }
-      if (body === "/startsofia_all") {
-        found = false;
-        break;
-      }
+    if (!activeId) {
+      setSofiaChatPaused(false);
+      return;
     }
-    if (found === null) return;
-    writeSofiaStoppedAll(found);
-    setSofiaStoppedAll(found);
-  }, [messages]);
+    let cancelled = false;
+    void (async () => {
+      const data = await fetchSofiaStatus(activeId);
+      if (cancelled || !data) return;
+      applySofiaFlags(data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId]);
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
@@ -1019,6 +1038,66 @@ export function InboxView({
     setLoadingOlder(false);
   }
 
+  function applySofiaFlags(data: {
+    linePaused?: boolean;
+    chatPaused?: boolean;
+  }) {
+    if (typeof data.linePaused === "boolean") {
+      writeSofiaStoppedAll(data.linePaused);
+      setSofiaStoppedAll(data.linePaused);
+    }
+    if (typeof data.chatPaused === "boolean") {
+      setSofiaChatPaused(data.chatPaused);
+    }
+  }
+
+  async function runSofiaAction(action: SofiaControlAction) {
+    if (!active || sofiaPending) return;
+    const conversationId = active.id;
+    setSofiaPending(action);
+    try {
+      const whitelist = action === "whitelist";
+      const res = await fetch(
+        whitelist ? "/api/sofia/whitelist" : "/api/sofia/command",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            whitelist
+              ? { conversationId }
+              : { conversationId, action },
+          ),
+        },
+      );
+      const data = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+        message?: string;
+        linePaused?: boolean;
+        chatPaused?: boolean;
+      };
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || data.message || "No se pudo completar");
+      }
+      applySofiaFlags(data);
+      if (action === "stop") setSofiaChatPaused(true);
+      if (action === "start") setSofiaChatPaused(false);
+      if (action === "stop-all") {
+        writeSofiaStoppedAll(true);
+        setSofiaStoppedAll(true);
+      }
+      if (action === "start-all") {
+        writeSofiaStoppedAll(false);
+        setSofiaStoppedAll(false);
+      }
+      toast.success(data.message || "Listo");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo completar");
+    } finally {
+      setSofiaPending(null);
+    }
+  }
+
   function sendTextOptimistic(overrideText?: string) {
     if (!active) return;
     const fromCommand = typeof overrideText === "string";
@@ -1093,6 +1172,15 @@ export function InboxView({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Error al enviar");
+        if (
+          payload === "/stopsofia_all" ||
+          payload === "/startsofia_all" ||
+          payload === "/stopsofia" ||
+          payload === "/startsofia"
+        ) {
+          const status = await fetchSofiaStatus(conversationId);
+          if (status) applySofiaFlags(status);
+        }
 
         setMessages((prev) => {
           const withoutTemp = prev.filter((m) => m.id !== tempId);
@@ -1572,6 +1660,7 @@ export function InboxView({
                         {contact?.name || contact?.phone_number}
                       </span>
                       <span
+                        suppressHydrationWarning
                         className={cn(
                           "shrink-0 text-[11px]",
                           unread
@@ -1596,7 +1685,7 @@ export function InboxView({
                             : "text-[var(--muted)]",
                         )}
                       >
-                        {c.last_message_preview || "Sin mensajes"}
+                        {sanitizeMessageBody(c.last_message_preview) || "Sin mensajes"}
                       </p>
                       {unread ? (
                         <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] px-1.5 text-[10px] font-bold leading-none text-white">
@@ -1736,7 +1825,8 @@ export function InboxView({
                 text={text}
                 onTextChange={setText}
                 onSend={() => sendTextOptimistic()}
-                onSendCommand={(cmd) => sendTextOptimistic(cmd)}
+                onSofiaAction={(action) => void runSofiaAction(action)}
+                sofiaPending={sofiaPending}
                 onSendMedia={sendMediaFile}
                 mediaSending={mediaSending}
                 onComposerKeyDown={handleComposerKeyDown}
@@ -1746,6 +1836,7 @@ export function InboxView({
                 replyTo={replyTo}
                 onReplyTo={setReplyTo}
                 sofiaStoppedAll={sofiaStoppedAll}
+                sofiaChatPaused={sofiaChatPaused}
                 onReact={(message, emoji) => void reactToMessage(message, emoji)}
                 onFirstPaint={(conversationId) => {
                   const startedAt =

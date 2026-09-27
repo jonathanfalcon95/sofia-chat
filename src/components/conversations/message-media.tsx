@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Download, FileText, Mic, X } from "lucide-react";
 import type { MessageRow } from "@/lib/conversations/types";
 import { takeMediaPreview } from "@/lib/media-preview-cache";
+import { sanitizeMessageBody } from "@/lib/ycloud/inbound-message-display";
 
 function mediaSrc(m: MessageRow) {
   if (m.localPreviewUrl) return m.localPreviewUrl;
@@ -76,10 +77,11 @@ export function MessageMedia({
   const outbound = m.direction === "outbound";
 
   if (type === "image" || type === "sticker") {
+    const defaultLabel = sanitizeMessageBody(m.body, type);
     if (!src || failed) {
       return (
         <MediaFallback
-          label={m.body || (type === "sticker" ? "Sticker" : "Imagen")}
+          label={defaultLabel}
           outbound={outbound}
         />
       );
@@ -94,7 +96,7 @@ export function MessageMedia({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={src}
-            alt={m.body || "Imagen"}
+            alt={defaultLabel}
             loading="lazy"
             decoding="async"
             onLoad={() => onContentReady?.()}
@@ -105,7 +107,7 @@ export function MessageMedia({
           />
         </button>
         {type === "image" && !isPlainMediaLabel(m.body, type) ? (
-          <div className="mt-1.5 px-1.5 text-sm leading-snug">{m.body}</div>
+          <div className="mt-1.5 px-1.5 text-sm leading-snug">{sanitizeMessageBody(m.body, type)}</div>
         ) : null}
         {type === "image" && dl ? (
           <DownloadLink href={dl} outbound={outbound} />
@@ -132,7 +134,7 @@ export function MessageMedia({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={src}
-                alt={m.body || "Imagen"}
+                alt={defaultLabel}
                 className="max-h-[80vh] max-w-full object-contain"
               />
               {dl ? (
@@ -157,7 +159,7 @@ export function MessageMedia({
       return (
         <div className="flex items-center gap-2 px-1 text-sm">
           <Mic className="h-4 w-4 shrink-0" />
-          {m.body || "Nota de voz"}
+          {sanitizeMessageBody(m.body, type)}
         </div>
       );
     }
@@ -175,7 +177,7 @@ export function MessageMedia({
           }}
         />
         {!isPlainMediaLabel(m.body, type) ? (
-          <div className="mt-1 text-xs opacity-80">{m.body}</div>
+          <div className="mt-1 text-xs opacity-80">{sanitizeMessageBody(m.body, type)}</div>
         ) : null}
       </div>
     );
@@ -183,7 +185,7 @@ export function MessageMedia({
 
   if (type === "video") {
     if (!src || failed) {
-      return <MediaFallback label={m.body || "Video"} outbound={outbound} />;
+      return <MediaFallback label={sanitizeMessageBody(m.body, type)} outbound={outbound} />;
     }
     return (
       <div className="msg-media-frame">
@@ -218,7 +220,7 @@ export function MessageMedia({
         >
           <FileText className="h-4 w-4 shrink-0" />
           <span className="min-w-0 truncate">
-            {m.media_filename || m.body || "Documento"}
+            {m.media_filename || sanitizeMessageBody(m.body, type)}
           </span>
         </a>
         {dl ? <DownloadLink href={dl} outbound={outbound} /> : null}
@@ -226,5 +228,5 @@ export function MessageMedia({
     );
   }
 
-  return <MediaFallback label={m.body || type || "Adjunto"} outbound={outbound} />;
+  return <MediaFallback label={sanitizeMessageBody(m.body, type)} outbound={outbound} />;
 }

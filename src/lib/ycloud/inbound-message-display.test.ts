@@ -3,11 +3,15 @@ import assert from "node:assert/strict";
 import {
   buildInboundBody,
   extractEditedMessage,
+  extractLocationDetails,
   formatContactsCard,
   formatInteractiveCta,
+  formatLocationMessage,
+  formatOrderMessage,
   formatSystemMessage,
   formatUnsupportedMessage,
   mediaContentDisposition,
+  sanitizeMessageBody,
 } from "./inbound-message-display.ts";
 import { whatsappDeepLink } from "../conversations/phone-digits.ts";
 
@@ -110,4 +114,41 @@ test("whatsappDeepLink normalizes phone", () => {
   assert.equal(whatsappDeepLink("+58 424-1889634"), "https://wa.me/584241889634");
   assert.equal(whatsappDeepLink(""), null);
   assert.equal(whatsappDeepLink(null), null);
+});
+
+test("formatLocationMessage formats name and coords", () => {
+  const loc = {
+    location: {
+      name: "Tienda Centro",
+      address: "Av. Principal 123",
+      latitude: 10.0614,
+      longitude: -69.292,
+    },
+  };
+  assert.equal(formatLocationMessage(loc), "📍 Tienda Centro\nAv. Principal 123");
+  const extracted = extractLocationDetails(loc);
+  assert.equal(extracted?.latitude, 10.0614);
+  assert.equal(extracted?.name, "Tienda Centro");
+
+  const rawCoords = { location: { latitude: 10.1, longitude: -69.2 } };
+  assert.equal(formatLocationMessage(rawCoords), "📍 Ubicación: 10.1, -69.2");
+});
+
+test("formatOrderMessage formats catalog orders", () => {
+  const order = {
+    order: {
+      text: "",
+      product_items: [{ quantity: 1 }, { quantity: 2 }],
+    },
+  };
+  assert.equal(formatOrderMessage(order), "🛒 Pedido de catálogo (2 artículos)");
+});
+
+test("sanitizeMessageBody converts brackets to human labels", () => {
+  assert.equal(sanitizeMessageBody("[image]"), "Imagen");
+  assert.equal(sanitizeMessageBody("[interactive]"), "Mensaje interactivo");
+  assert.equal(sanitizeMessageBody("[location]"), "Ubicación");
+  assert.equal(sanitizeMessageBody("[audio]"), "Nota de voz");
+  assert.equal(sanitizeMessageBody("Hola mundo"), "Hola mundo");
+  assert.equal(sanitizeMessageBody(null, "image"), "Imagen");
 });
