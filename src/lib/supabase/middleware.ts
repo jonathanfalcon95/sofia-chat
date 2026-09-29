@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isSafeNextPath, loginUrlWithNext } from "@/lib/auth/safe-next-path";
+import { toPublicUrl } from "@/lib/server-url";
 
 function nextWithPathname(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
@@ -67,7 +68,7 @@ export async function updateSession(request: NextRequest) {
     const loginPath = loginUrlWithNext(path, request.nextUrl.search);
     return redirectPreservingCookies(
       supabaseResponse,
-      new URL(loginPath, request.url),
+      toPublicUrl(loginPath, request),
     );
   }
 
@@ -76,7 +77,7 @@ export async function updateSession(request: NextRequest) {
     const destination = isSafeNextPath(next) ? next : "/conversations";
     return redirectPreservingCookies(
       supabaseResponse,
-      new URL(destination, request.url),
+      toPublicUrl(destination, request),
     );
   }
 

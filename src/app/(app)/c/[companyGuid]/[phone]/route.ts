@@ -6,6 +6,7 @@ import {
 } from "@/lib/conversations/inbox-company-preference";
 import { resolveChatByCompanyGuidAndPhone } from "@/lib/conversations/resolve-chat-by-phone";
 import { getAppSession } from "@/lib/rbac/session";
+import { toPublicUrl } from "@/lib/server-url";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function GET(
   const path = `/c/${companyGuid}/${phone}`;
   const session = await getAppSession();
   if (!session) {
-    return NextResponse.redirect(new URL(loginUrlWithNext(path), request.url));
+    return NextResponse.redirect(toPublicUrl(loginUrlWithNext(path), request));
   }
 
   const result = await resolveChatByCompanyGuidAndPhone(
@@ -26,11 +27,11 @@ export async function GET(
     phone,
   );
   if (!result.ok) {
-    return NextResponse.redirect(new URL("/chat-not-found", request.url));
+    return NextResponse.redirect(toPublicUrl("/chat-not-found", request));
   }
 
   const response = NextResponse.redirect(
-    new URL(`/conversations/${result.conversationId}`, request.url),
+    toPublicUrl(`/conversations/${result.conversationId}`, request),
   );
   response.cookies.set(
     INBOX_COMPANY_COOKIE,
