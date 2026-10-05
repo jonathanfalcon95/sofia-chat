@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendWhatsAppText, sendWhatsAppTemplate } from "@/lib/ycloud/client";
@@ -9,6 +9,7 @@ import {
   sessionHasPermission,
 } from "@/lib/rbac/session";
 import { logSystemError } from "@/lib/errors/log-system-error";
+import { mirrorManualMessage } from "@/lib/smartsales/mirror-manual-message";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -155,6 +156,42 @@ export async function POST(request: Request) {
           last_message_preview: text.slice(0, 200),
         })
         .eq("id", conversationId);
+
+      const companyId = conversation.company_id as string;
+      const userId = session.userId;
+      const customerPhone = contact.phone_number;
+      after(async () => {
+        try {
+          const result = await mirrorManualMessage({
+            phoneNumber: customerPhone,
+            content: text,
+          });
+          if (result.ok && !result.skipped) return;
+          if (result.ok && result.reason === "empty_input") return;
+          await logSystemError({
+            source: "smartsales.mirror",
+            level: "warn",
+            message: result.ok
+              ? "smartsales conversation not found"
+              : "smartsales mirror failed",
+            errorCode: result.reason,
+            companyId,
+            userId,
+            context: { conversationId, reason: result.reason },
+          });
+        } catch (err) {
+          await logSystemError({
+            source: "smartsales.mirror",
+            level: "warn",
+            message: "smartsales mirror failed",
+            error: err,
+            companyId,
+            userId,
+            errorCode: "mirror_threw",
+            context: { conversationId },
+          });
+        }
+      });
 
       return NextResponse.json({ message, ycloud: ycloudRes });
     }
