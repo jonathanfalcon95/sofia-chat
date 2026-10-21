@@ -3,6 +3,8 @@ const YCLOUD_BASE = "https://api.ycloud.com/v2";
 export const YCLOUD_WHATSAPP_WEBHOOK_EVENTS = [
   "whatsapp.inbound_message.received",
   "whatsapp.message.updated",
+  "whatsapp.smb.message.echoes",
+  "whatsapp.smb.message.created",
 ] as const;
 
 function resolveApiKey(explicit?: string) {

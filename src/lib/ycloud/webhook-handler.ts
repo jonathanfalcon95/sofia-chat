@@ -39,7 +39,9 @@ async function enrichInboundMedia(
   if (
     eventType !== "whatsapp.inbound_message.received" &&
     eventType !== "whatsapp.inbound.message" &&
-    eventType !== "whatsapp.message.updated"
+    eventType !== "whatsapp.message.updated" &&
+    eventType !== "whatsapp.smb.message.echoes" &&
+    eventType !== "whatsapp.smb.message.created"
   ) {
     return;
   }

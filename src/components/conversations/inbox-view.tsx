@@ -684,7 +684,13 @@ export function InboxView({
               m.type === enriched.type
             ),
         );
-        return [...withoutDupPending, enriched];
+        // Insert by created_at so late webhooks (app echoes / delivered) land in order.
+        const next = [...withoutDupPending, enriched];
+        next.sort(
+          (a, b) =>
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        );
+        return next;
       });
     },
     [markConversationRead],
