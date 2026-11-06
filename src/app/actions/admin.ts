@@ -417,7 +417,7 @@ export async function updateRole(input: {
   revalidatePath("/settings/roles");
 }
 
-export async function assignMembershipInboxes(
+async function assignMembershipInboxes(
   membershipId: string,
   inboxIds: string[],
 ) {
@@ -474,6 +474,29 @@ export async function updateMembership(input: {
   const db = hasServiceRole()
     ? createAdminClient()
     : await createClient();
+
+  // The permission above only covers input.companyId; writes below use ids
+  // from the client with the service role, so tie them to that company first.
+  const { data: membership, error: membershipCheckError } = await db
+    .from("company_memberships")
+    .select("id")
+    .eq("id", input.membershipId)
+    .eq("company_id", input.companyId)
+    .eq("user_id", input.userId)
+    .maybeSingle();
+  if (membershipCheckError) throw new Error(membershipCheckError.message);
+  if (!membership) throw new Error("forbidden");
+
+  if (input.roleId) {
+    const { data: role, error: roleCheckError } = await db
+      .from("roles")
+      .select("id")
+      .eq("id", input.roleId)
+      .eq("company_id", input.companyId)
+      .maybeSingle();
+    if (roleCheckError) throw new Error(roleCheckError.message);
+    if (!role) throw new Error("El rol no pertenece a la empresa");
+  }
 
   const { data: validInboxes, error: inboxCheckError } = await db
     .from("inboxes")
