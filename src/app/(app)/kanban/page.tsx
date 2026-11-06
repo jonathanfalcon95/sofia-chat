@@ -53,6 +53,7 @@ export default async function KanbanPage({
   let cards: Awaited<ReturnType<typeof loadAllKanbanColumns>>["cards"] = [];
   let hasMoreByTag: Record<string, boolean> = {};
   let offsetByTag: Record<string, number> = {};
+  let loadFailed = false;
 
   if (companyId && (tags?.length ?? 0) > 0) {
     try {
@@ -73,6 +74,7 @@ export default async function KanbanPage({
       offsetByTag = loaded.offsetByTag;
     } catch (err) {
       console.error("[kanban] load failed", err);
+      loadFailed = true;
     }
   }
 
@@ -138,6 +140,14 @@ export default async function KanbanPage({
           </form>
         }
       />
+      {loadFailed ? (
+        <p
+          role="alert"
+          className="mb-4 rounded-lg border border-[var(--danger)]/40 bg-[var(--surface)] px-4 py-3 text-sm text-[var(--danger)]"
+        >
+          No se pudieron cargar las tarjetas. Recarga la página para reintentar.
+        </p>
+      ) : null}
       <KanbanBoard
         tags={tags ?? []}
         cards={cards}

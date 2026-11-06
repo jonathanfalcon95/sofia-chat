@@ -16,6 +16,7 @@ export type ThreadBootstrapPayload = {
   notes?: NoteRow[];
   conversation?: ConversationRow | null;
   missing?: boolean;
+  loadFailed?: boolean;
 };
 
 type InboxThreadContextValue = {
@@ -66,6 +67,7 @@ export function InboxThreadBootstrap({
   initialNotes = [],
   conversation = null,
   missing = false,
+  loadFailed = false,
 }: {
   conversationId: string;
   initialMessages: MessageRow[];
@@ -73,6 +75,7 @@ export function InboxThreadBootstrap({
   initialNotes?: NoteRow[];
   conversation?: ConversationRow | null;
   missing?: boolean;
+  loadFailed?: boolean;
 }) {
   const { applyBootstrap } = useInboxThreadContext();
 
@@ -84,6 +87,7 @@ export function InboxThreadBootstrap({
       notes: initialNotes,
       conversation,
       missing,
+      loadFailed,
     });
   }, [
     applyBootstrap,
@@ -92,6 +96,7 @@ export function InboxThreadBootstrap({
     initialMessages,
     initialHasMoreMessages,
     initialNotes,
+    loadFailed,
     missing,
   ]);
 

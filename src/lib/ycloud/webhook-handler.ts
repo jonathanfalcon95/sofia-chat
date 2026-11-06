@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyYCloudSignature } from "@/lib/ycloud/signature";
 import { extractInboundMedia } from "@/lib/media";
 import { logSystemError } from "@/lib/errors/log-system-error";
+import { enrichMessageTextFromWebhook } from "@/lib/ycloud/message-enrichment";
 import {
   decryptAccountWebhookSecret,
   listYCloudAccountRows,
@@ -77,6 +78,28 @@ async function enrichInboundMedia(
   }
 }
 
+function scheduleTextEnrichment(
+  eventType: string,
+  payload: Record<string, unknown>,
+  eventId: string,
+) {
+  after(async () => {
+    try {
+      await enrichMessageTextFromWebhook(payload);
+    } catch (error) {
+      console.error("webhook text enrich error", error);
+      await logSystemError({
+        source: "api.webhooks.ycloud",
+        message: "message text enrich failed",
+        error,
+        level: "warn",
+        errorCode: "webhook_text_enrich_error",
+        context: { eventId, eventType },
+      });
+    }
+  });
+}
+
 export async function processVerifiedYCloudEvent(args: {
   rawBody: string;
   eventId: string;
@@ -109,6 +132,7 @@ export async function processVerifiedYCloudEvent(args: {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
     await enrichInboundMedia(supabase, args.eventType, args.payload, args.eventId);
+    scheduleTextEnrichment(args.eventType, args.payload, args.eventId);
     return NextResponse.json({ received: true, result: data });
   }
 
@@ -132,6 +156,7 @@ export async function processVerifiedYCloudEvent(args: {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
   await enrichInboundMedia(supabase, args.eventType, args.payload, args.eventId);
+  scheduleTextEnrichment(args.eventType, args.payload, args.eventId);
   return NextResponse.json({ received: true, result: data });
 }
 

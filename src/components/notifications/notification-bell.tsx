@@ -7,6 +7,7 @@ import { Bell } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { sanitizeMessageBody } from "@/lib/ycloud/inbound-message-display";
 
 type NotificationItem = {
   id: string;
@@ -128,7 +129,9 @@ export function NotificationBell({ userId }: { userId: string }) {
             : assignee
               ? "Nuevo mensaje en el inbox"
               : "Nuevo mensaje (sin asignar)",
-        body: (msg.body || "Nuevo mensaje").slice(0, 120),
+        body: msg.body
+          ? sanitizeMessageBody(msg.body).slice(0, 120)
+          : "Nuevo mensaje",
         conversationId,
         createdAt: msg.created_at || new Date().toISOString(),
       });
@@ -144,7 +147,8 @@ export function NotificationBell({ userId }: { userId: string }) {
       const { data: convs } = await supabase
         .from("conversations")
         .select("id, assignee_id")
-        .limit(100);
+        .eq("assignee_id", userId)
+        .limit(500);
       if (cancelled) return;
       for (const row of convs ?? []) {
         assigneeCache.current.set(
@@ -178,8 +182,9 @@ export function NotificationBell({ userId }: { userId: string }) {
                 id: `assign-${row.id}-${Date.now()}`,
                 type: "assignment",
                 title: "Chat asignado",
-                body:
-                  row.last_message_preview || "Te asignaron una conversación",
+                body: row.last_message_preview
+                  ? sanitizeMessageBody(row.last_message_preview)
+                  : "Te asignaron una conversación",
                 conversationId: row.id,
                 createdAt: new Date().toISOString(),
               });
@@ -240,7 +245,9 @@ export function NotificationBell({ userId }: { userId: string }) {
           id: `msg-${msg.id}`,
           type: "message",
           title: "Nuevo mensaje entrante",
-          body: (msg.body || "Nuevo mensaje").slice(0, 120),
+          body: msg.body
+            ? sanitizeMessageBody(msg.body).slice(0, 120)
+            : "Nuevo mensaje",
           conversationId: msg.conversation_id as string,
           createdAt: (msg.created_at as string) || new Date().toISOString(),
         });

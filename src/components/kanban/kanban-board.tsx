@@ -8,6 +8,7 @@ import { setConversationTag } from "@/app/actions/conversations";
 import { loadMoreKanbanCards } from "@/app/actions/kanban";
 import { Button } from "@/components/ui/button";
 import type { KanbanCard } from "@/lib/kanban/load-kanban-cards";
+import { sanitizeMessageBody } from "@/lib/ycloud/inbound-message-display";
 
 type Tag = { id: string; name: string; color: string; position: number };
 
@@ -154,7 +155,9 @@ export function KanbanBoard({
                   </div>
                 ) : null}
                 <div className="mt-2 line-clamp-2 text-sm text-[var(--muted)]">
-                  {card.preview || "Sin mensajes"}
+                  {card.preview
+                    ? sanitizeMessageBody(card.preview)
+                    : "Sin mensajes"}
                 </div>
                 <div className="mt-3">
                   <Link

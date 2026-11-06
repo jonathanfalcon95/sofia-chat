@@ -32,7 +32,6 @@ import {
   rememberMediaPreview,
   takeMediaPreview,
 } from "@/lib/media-preview-cache";
-import { sanitizeMessageBody } from "@/lib/ycloud/inbound-message-display";
 import {
   PRIORITY_LABELS,
   TICKET_PRIORITIES,
@@ -53,6 +52,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Avatar } from "@/components/ui/avatar";
+import { ConversationListItem } from "@/components/conversations/conversation-list-item";
 import { MessageThread } from "@/components/conversations/message-thread";
 import {
   InboxThreadProvider,
@@ -121,6 +122,11 @@ const ConversationSidePanel = dynamic(
   },
 );
 
+type ReloadMode = "merge" | "replace";
+
+/** Hover this long before prefetching, so sweeping over the list stays free. */
+const PREFETCH_HOVER_DELAY_MS = 150;
+
 function enrichMessages(rows: MessageRow[]) {
   return rows.map((m) => {
     const cachedPreview = takeMediaPreview(m.id);
@@ -138,6 +144,7 @@ export function InboxView({
   companies = [],
   initialCompanyId = "",
   showCompanyFilter = false,
+  initialListLoadFailed = false,
   children,
 }: {
   initialConversations: ConversationRow[];
@@ -159,6 +166,7 @@ export function InboxView({
   companies?: Array<{ id: string; name: string }>;
   initialCompanyId?: string;
   showCompanyFilter?: boolean;
+  initialListLoadFailed?: boolean;
   children?: React.ReactNode;
 }) {
   const router = useRouter();
@@ -187,7 +195,6 @@ export function InboxView({
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [text, setText] = useState("");
   const [pending, startTransition] = useTransition();
   const [note, setNote] = useState("");
   const [ticketOpen, setTicketOpen] = useState(false);
@@ -214,6 +221,8 @@ export function InboxView({
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [threadMissing, setThreadMissing] = useState(false);
+  const [threadLoadFailed, setThreadLoadFailed] = useState(false);
+  const [listLoadFailed, setListLoadFailed] = useState(initialListLoadFailed);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const desktopRedirectRef = useRef(false);
   /** User picked another company while a thread from a different one was open. */
@@ -222,6 +231,9 @@ export function InboxView({
   const notesLoadingForIdRef = useRef<string | null>(null);
   const routeFetchRef = useRef<string | null>(null);
   const reloadDebounceRef = useRef<number | null>(null);
+  const reloadInFlightRef = useRef<Promise<void> | null>(null);
+  const reloadQueuedRef = useRef<ReloadMode | null>(null);
+  const prefetchTimerRef = useRef<number | null>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const openStartByConversationRef = useRef<Map<string, number>>(new Map());
   const activeIdRef = useRef<string | null>(activeId);
@@ -261,6 +273,7 @@ export function InboxView({
 
   useEffect(() => {
     setThreadMissing(false);
+    setThreadLoadFailed(false);
     routeFetchRef.current = null;
     if (!routeId) {
       ignoreRouteCompanySyncRef.current = false;
@@ -368,31 +381,6 @@ export function InboxView({
     persistCompanyId(nextId);
   }
 
-  function resizeComposer() {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, 36), 136)}px`;
-  }
-
-  function insertEmoji(emoji: string) {
-    const el = composerRef.current;
-    if (!el) {
-      setText((prev) => prev + emoji);
-      return;
-    }
-    const start = el.selectionStart ?? text.length;
-    const end = el.selectionEnd ?? text.length;
-    const next = text.slice(0, start) + emoji + text.slice(end);
-    setText(next);
-    requestAnimationFrame(() => {
-      el.focus();
-      const pos = start + emoji.length;
-      el.setSelectionRange(pos, pos);
-      resizeComposer();
-    });
-  }
-
   useLayoutEffect(() => {
     const mq = window.matchMedia("(min-width: 901px)");
     const sync = () => setIsDesktop(mq.matches);
@@ -437,20 +425,21 @@ export function InboxView({
     }
     if (routeFetchRef.current === routeId) return;
     routeFetchRef.current = routeId;
-    let cancelled = false;
-    const timeout = window.setTimeout(() => {
-      if (!cancelled) setThreadMissing(true);
-    }, 8000);
+    // Not tied to effect cleanup: this effect re-runs on every list change, and
+    // cancelling here would strand the spinner since the ref blocks a refetch.
+    const isCurrent = () =>
+      routeFetchRef.current === routeId && !ignoreRouteCompanySyncRef.current;
     void (async () => {
       try {
         const supabase = createClient();
         const row = await fetchConversationById(supabase, routeId);
-        if (cancelled || ignoreRouteCompanySyncRef.current) return;
+        if (!isCurrent()) return;
         if (!row) {
           setThreadMissing(true);
           return;
         }
         setThreadMissing(false);
+        setThreadLoadFailed(false);
         setConversations((prev) => upsertConversationInList(prev, row));
         if (
           showCompanyFilter &&
@@ -458,16 +447,11 @@ export function InboxView({
         ) {
           persistCompanyId(row.company_id);
         }
-      } catch {
-        if (!cancelled) setThreadMissing(true);
-      } finally {
-        window.clearTimeout(timeout);
+      } catch (err) {
+        console.error("Failed to load conversation", err);
+        if (isCurrent()) setThreadLoadFailed(true);
       }
     })();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeout);
-    };
   }, [
     routeId,
     conversations,
@@ -505,44 +489,78 @@ export function InboxView({
   ]);
 
   const reloadConversations = useCallback(
-    async (mode: "merge" | "replace" = "merge") => {
-      const supabase = createClient();
-      const startedAt = perfNowMs();
-      const f = filtersRef.current;
-      try {
-        const page = await fetchConversationListPage(supabase, {
-          assignee: f.assigneeFilter,
-          assigneeId: f.filterAgentId || undefined,
-          currentUserId: f.currentUserId,
-          phoneSearch: f.debouncedPhoneSearch,
-          contactTagId: f.filterContactTagId || undefined,
-          companyId: f.companyId || undefined,
-          pageSize: CONVERSATION_PAGE_SIZE,
-        });
-        setConversations((prev) => {
-          const next =
-            mode === "replace"
-              ? page.conversations
-              : mergeConversationListPage(prev, page.conversations);
-          const keepId = activeIdRef.current;
-          if (!keepId || next.some((c) => c.id === keepId)) return next;
-          const kept = prev.find((c) => c.id === keepId);
-          if (!kept) return next;
-          if (f.companyId && kept.company_id !== f.companyId) return next;
-          return upsertConversationInList(next, kept);
-        });
-        setHasMoreConversations(page.hasMore);
-        reportClientConversationMetric("conversation_list_reload", {
-          durationMs: durationSince(startedAt),
-          rows: page.conversations.length,
-          mode,
-        });
-      } catch (err) {
-        console.error("Failed to reload conversations", err);
+    (mode: ReloadMode = "merge"): Promise<void> => {
+      // One request at a time: calls made meanwhile collapse into a single rerun.
+      if (reloadInFlightRef.current) {
+        if (reloadQueuedRef.current !== "replace") {
+          reloadQueuedRef.current = mode;
+        }
+        return reloadInFlightRef.current;
       }
+
+      const run = async () => {
+        const supabase = createClient();
+        let nextMode: ReloadMode | null = mode;
+        while (nextMode) {
+          const currentMode: ReloadMode = nextMode;
+          reloadQueuedRef.current = null;
+          const startedAt = perfNowMs();
+          const f = filtersRef.current;
+          try {
+            const page = await fetchConversationListPage(supabase, {
+              assignee: f.assigneeFilter,
+              assigneeId: f.filterAgentId || undefined,
+              currentUserId: f.currentUserId,
+              phoneSearch: f.debouncedPhoneSearch,
+              contactTagId: f.filterContactTagId || undefined,
+              companyId: f.companyId || undefined,
+              pageSize: CONVERSATION_PAGE_SIZE,
+            });
+            // Filters changed mid-request: their reload is queued, drop this one.
+            if (filtersRef.current === f) {
+              setConversations((prev) => {
+                const next =
+                  currentMode === "replace"
+                    ? page.conversations
+                    : mergeConversationListPage(prev, page.conversations);
+                const keepId = activeIdRef.current;
+                if (!keepId || next.some((c) => c.id === keepId)) return next;
+                const kept = prev.find((c) => c.id === keepId);
+                if (!kept) return next;
+                if (f.companyId && kept.company_id !== f.companyId) return next;
+                return upsertConversationInList(next, kept);
+              });
+              setHasMoreConversations(page.hasMore);
+              setListLoadFailed(false);
+              reportClientConversationMetric("conversation_list_reload", {
+                durationMs: durationSince(startedAt),
+                rows: page.conversations.length,
+                mode: currentMode,
+              });
+            }
+          } catch (err) {
+            console.error("Failed to reload conversations", err);
+            if (filtersRef.current === f) setListLoadFailed(true);
+          }
+          nextMode = reloadQueuedRef.current as ReloadMode | null;
+        }
+        reloadInFlightRef.current = null;
+      };
+
+      reloadInFlightRef.current = run();
+      return reloadInFlightRef.current;
     },
     [],
   );
+
+  const retryListLoad = useCallback(async () => {
+    setListRefreshing(true);
+    try {
+      await reloadConversations("replace");
+    } finally {
+      setListRefreshing(false);
+    }
+  }, [reloadConversations]);
 
   const queueReloadConversations = useCallback(() => {
     if (reloadDebounceRef.current) return;
@@ -630,10 +648,12 @@ export function InboxView({
           : c,
       ),
     );
+    // No write (and no realtime event for every subscriber) when already read.
     void createClient()
       .from("conversations")
       .update({ unread_count: 0 })
       .eq("id", conversationId)
+      .gt("unread_count", 0)
       .then(({ error }) => {
         if (error) {
           console.error("Failed to mark conversation read", error);
@@ -805,13 +825,18 @@ export function InboxView({
     prefetchInFlightRef.current.add(conversationId);
     try {
       const supabase = createClient();
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("messages")
         .select(MESSAGE_SELECT)
         .eq("conversation_id", conversationId)
         .neq("type", "reaction")
         .order("created_at", { ascending: false })
         .limit(MESSAGE_PAGE_SIZE);
+      // Never cache a failure as an empty thread: it would block every retry.
+      if (error) {
+        console.error("Failed to prefetch messages", error);
+        return;
+      }
       const page = enrichMessages(
         ((data as MessageRow[]) ?? []).slice().reverse(),
       );
@@ -834,14 +859,41 @@ export function InboxView({
     }
   }, []);
 
+  const cancelPrefetch = useCallback(() => {
+    if (prefetchTimerRef.current) {
+      window.clearTimeout(prefetchTimerRef.current);
+      prefetchTimerRef.current = null;
+    }
+  }, []);
+
+  const schedulePrefetch = useCallback(
+    (conversationId: string) => {
+      cancelPrefetch();
+      prefetchTimerRef.current = window.setTimeout(() => {
+        prefetchTimerRef.current = null;
+        void prefetchMessages(conversationId);
+      }, PREFETCH_HOVER_DELAY_MS);
+    },
+    [cancelPrefetch, prefetchMessages],
+  );
+
   const applyBootstrap = useCallback(
     (payload: ThreadBootstrapPayload) => {
+      if (payload.loadFailed) {
+        if (payload.conversationId === activeIdRef.current) {
+          setThreadLoadFailed(true);
+          setLoadingThread(false);
+        }
+        return;
+      }
+
       if (payload.missing) {
         setThreadMissing(true);
         setLoadingThread(false);
         return;
       }
 
+      setThreadLoadFailed(false);
       const nextMessages = enrichMessages(payload.messages);
       const cached = threadCacheRef.current.get(payload.conversationId);
       const nextNotes =
@@ -951,7 +1003,28 @@ export function InboxView({
       if (reloadDebounceRef.current) {
         window.clearTimeout(reloadDebounceRef.current);
       }
+      if (prefetchTimerRef.current) {
+        window.clearTimeout(prefetchTimerRef.current);
+      }
     };
+  }, []);
+
+  const agentNames = useMemo(
+    () => new Map(agents.map((a) => [a.id, a.full_name || a.email])),
+    [agents],
+  );
+  const showInboxNames = useMemo(
+    () => new Set(conversations.map((c) => c.inbox_id)).size > 1,
+    [conversations],
+  );
+
+  // Stable handler for the memoized list rows.
+  const openConversationRef = useRef<(id: string) => void>(() => {});
+  useEffect(() => {
+    openConversationRef.current = openConversation;
+  });
+  const handleOpenConversation = useCallback((id: string) => {
+    openConversationRef.current(id);
   }, []);
 
   // nowMs refreshes window status every 30s
@@ -972,20 +1045,16 @@ export function InboxView({
     })}`;
   })();
 
-  function focusComposer() {
-    requestAnimationFrame(() => {
-      composerRef.current?.focus();
-    });
-  }
-
   function openConversation(id: string) {
     if (id === activeId && id === routeId) {
       setPendingRouteId(null);
       return;
     }
+    cancelPrefetch();
     activeIdRef.current = id;
     setPendingRouteId(id);
     setReplyTo(null);
+    setThreadLoadFailed(false);
     openStartByConversationRef.current.set(id, perfNowMs());
     reportClientConversationMetric("conversation_open_start", {
       conversationId: id,
@@ -998,12 +1067,19 @@ export function InboxView({
       setHasMoreMessages(cached.hasMore);
       setLoadingThread(false);
     } else {
+      // The route's server page loads the messages; fetching here too doubled it.
       setLoadingThread(true);
-      void prefetchMessages(id);
     }
 
     markConversationRead(id);
     router.push(`/conversations/${id}`, { scroll: false });
+  }
+
+  function retryThreadLoad() {
+    setThreadLoadFailed(false);
+    setLoadingThread(true);
+    routeFetchRef.current = null;
+    router.refresh();
   }
 
   function backToList() {
@@ -1104,39 +1180,35 @@ export function InboxView({
     }
   }
 
-  function sendTextOptimistic(overrideText?: string) {
-    if (!active) return;
-    const fromCommand = typeof overrideText === "string";
-    const payload = (fromCommand ? overrideText : text).trim();
-    if (!payload || !isWithinCustomerWindow(active.window_expires_at)) return;
-
-    const synced = syncSofiaStoppedAllFromCommand(payload);
-    if (synced !== null) setSofiaStoppedAll(synced);
+  /** False when nothing was sent, so the composer keeps the typed text. */
+  function sendTextOptimistic(rawText: string): boolean {
+    if (!active) return false;
+    const payload = rawText.trim();
+    if (!payload || !isWithinCustomerWindow(active.window_expires_at)) {
+      return false;
+    }
 
     const conversationId = active.id;
     const tempId = `temp-${crypto.randomUUID()}`;
     const createdAt = new Date().toISOString();
-    const replyToWamid = fromCommand
-      ? null
-      : replyTo?.wamid ||
-        (replyTo?.ycloud_message_id?.startsWith("wamid.")
-          ? replyTo.ycloud_message_id
-          : null) ||
-        null;
+    const replyToWamid =
+      replyTo?.wamid ||
+      (replyTo?.ycloud_message_id?.startsWith("wamid.")
+        ? replyTo.ycloud_message_id
+        : null) ||
+      null;
 
-    if (!fromCommand && replyTo && !replyToWamid) {
+    if (replyTo && !replyToWamid) {
       toast.error(
         "Este mensaje aún no tiene wamid de WhatsApp. Espera un momento e inténtalo de nuevo.",
       );
-      return;
+      return false;
     }
 
-    if (!fromCommand) {
-      setText("");
-      setReplyTo(null);
-      focusComposer();
-      requestAnimationFrame(() => resizeComposer());
-    }
+    const synced = syncSofiaStoppedAllFromCommand(payload);
+    if (synced !== null) setSofiaStoppedAll(synced);
+
+    setReplyTo(null);
 
     const optimistic: MessageRow = {
       id: tempId,
@@ -1209,6 +1281,7 @@ export function InboxView({
         toast.error(e instanceof Error ? e.message : "No se pudo enviar");
       }
     })();
+    return true;
   }
 
   async function sendMediaFile(file: File, caption?: string) {
@@ -1370,15 +1443,6 @@ export function InboxView({
     }
   }
 
-  function handleComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (canText && text.trim()) {
-        sendTextOptimistic();
-      }
-    }
-  }
-
   const mobileView = activeId ? "thread" : "list";
 
   return (
@@ -1387,7 +1451,7 @@ export function InboxView({
       <div>
       <div className={`chat-layout chat-mobile-${mobileView}`}>
         <section className="chat-pane chat-pane-list">
-          <div className="space-y-3 border-b border-[var(--line)] p-3.5 bg-[var(--surface)]">
+          <div className="space-y-2.5 bg-[var(--surface)] p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
                 <h2 className="text-base font-bold tracking-tight text-[var(--ink)]">
@@ -1440,7 +1504,7 @@ export function InboxView({
                 value={phoneSearch}
                 onChange={(e) => setPhoneSearch(e.target.value)}
                 placeholder="Buscar por teléfono o nombre..."
-                className="h-9 min-h-[36px] pl-8.5 pr-8 text-xs bg-[var(--surface-2)] border-transparent hover:border-[var(--line)] focus:border-[var(--accent)] focus:bg-[var(--surface)] transition-all rounded-lg"
+                className="h-9 min-h-[36px] rounded-lg border-transparent bg-[var(--surface-2)] pl-8.5 pr-8 text-[13px] transition-all focus:bg-[var(--surface-2)]"
                 aria-label="Buscar conversaciones"
               />
               {phoneSearch ? (
@@ -1455,7 +1519,7 @@ export function InboxView({
               ) : null}
             </div>
 
-            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--surface-2)] border border-[var(--line)]/60">
+            <div className="flex items-center gap-1.5">
               {(
                 [
                   { id: "all", label: "Todas" },
@@ -1473,10 +1537,10 @@ export function InboxView({
                       setAssigneeFilter(opt.id);
                     }}
                     className={cn(
-                      "flex-1 py-1.5 px-2 text-xs font-medium rounded-md transition-all text-center truncate cursor-pointer",
+                      "cursor-pointer truncate rounded-full px-3 py-1 text-center text-[13px] transition-all",
                       isSelected
-                        ? "bg-[var(--surface)] text-[var(--ink)] shadow-xs font-semibold"
-                        : "text-[var(--muted)] hover:text-[var(--ink)] hover:bg-[var(--surface)]/50"
+                        ? "bg-[var(--accent-soft)] font-medium text-[var(--accent)]"
+                        : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--ink)]",
                     )}
                   >
                     {opt.label}
@@ -1620,7 +1684,45 @@ export function InboxView({
               </div>
             ) : null}
             <div className="h-full overflow-auto">
-            {conversations.length === 0 ? (
+            {listLoadFailed && conversations.length > 0 ? (
+              <div
+                role="alert"
+                className="flex items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--surface-2)] px-4 py-2 text-xs text-[var(--muted)]"
+              >
+                <span>No se pudo actualizar la lista</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  loading={listRefreshing}
+                  onClick={() => void retryListLoad()}
+                >
+                  Reintentar
+                </Button>
+              </div>
+            ) : null}
+            {conversations.length === 0 && listLoadFailed ? (
+              <div
+                role="alert"
+                className="flex flex-col items-start gap-3 p-6 text-sm text-[var(--muted)]"
+              >
+                <p>No se pudieron cargar las conversaciones.</p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={listRefreshing}
+                  onClick={() => void retryListLoad()}
+                >
+                  Reintentar
+                </Button>
+              </div>
+            ) : conversations.length === 0 && companies.length === 0 ? (
+              <div className="p-6 text-sm text-[var(--muted)]">
+                Tu usuario no tiene una empresa activa asignada. Pide a un
+                administrador que revise tu acceso.
+              </div>
+            ) : conversations.length === 0 ? (
               <div className="p-6 text-sm text-[var(--muted)]">
                 {phoneSearch.trim() ||
                 filterContactTagId ||
@@ -1631,123 +1733,20 @@ export function InboxView({
               </div>
             ) : (
               <>
-              {conversations.map((c) => {
-                const contact = c.contacts;
-                const tag = c.conversation_tags?.[0]?.tags;
-                const assignee = c.assignee_id
-                  ? agents.find((a) => a.id === c.assignee_id)
-                  : null;
-                const assigneeBadgeColor = c.assignee_id
-                  ? assigneeColor(c.assignee_id)
-                  : null;
-                const activeRow = c.id === highlightedId;
-                const unread = c.unread_count > 0;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => openConversation(c.id)}
-                    onMouseEnter={() => void prefetchMessages(c.id)}
-                    onFocus={() => void prefetchMessages(c.id)}
-                    className={cn(
-                      "chat-row w-full border-b border-[var(--line)] px-4 py-3 text-left transition",
-                      activeRow
-                        ? "bg-[var(--accent-soft)]"
-                        : "hover:bg-[var(--surface-2)]",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span
-                        className={cn(
-                          "truncate text-sm text-[var(--ink)]",
-                          unread ? "font-bold" : "font-medium",
-                        )}
-                      >
-                        {contact?.name || contact?.phone_number}
-                      </span>
-                      <span
-                        suppressHydrationWarning
-                        className={cn(
-                          "shrink-0 text-[11px]",
-                          unread
-                            ? "font-semibold text-[var(--accent)]"
-                            : "text-[var(--muted)]",
-                        )}
-                      >
-                        {c.last_message_at
-                          ? formatDistanceToNow(new Date(c.last_message_at), {
-                              addSuffix: true,
-                              locale: es,
-                            })
-                          : ""}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center gap-2">
-                      <p
-                        className={cn(
-                          "min-w-0 flex-1 line-clamp-1 text-xs",
-                          unread
-                            ? "font-semibold text-[var(--ink)]"
-                            : "text-[var(--muted)]",
-                        )}
-                      >
-                        {sanitizeMessageBody(c.last_message_preview) || "Sin mensajes"}
-                      </p>
-                      {unread ? (
-                        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] px-1.5 text-[10px] font-bold leading-none text-white">
-                          {c.unread_count > 99 ? "99+" : c.unread_count}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <Badge className="normal-case">{c.inboxes?.name}</Badge>
-                      {c.assignee_id && assigneeBadgeColor ? (
-                        <Badge
-                          className="normal-case"
-                          style={{
-                            background: `${assigneeBadgeColor}22`,
-                            color: assigneeBadgeColor,
-                            borderColor: `${assigneeBadgeColor}55`,
-                          }}
-                        >
-                          {assignee?.full_name ||
-                            assignee?.email ||
-                            "Agente"}
-                        </Badge>
-                      ) : (
-                        <Badge className="normal-case border-[var(--line)] bg-[var(--surface-2)] text-[var(--muted)]">
-                          Sin asignar
-                        </Badge>
-                      )}
-                      {tag ? (
-                        <Badge
-                          style={{
-                            background: `${tag.color}22`,
-                            color: tag.color,
-                            borderColor: `${tag.color}55`,
-                          }}
-                        >
-                          {tag.name}
-                        </Badge>
-                      ) : null}
-                      {(contact?.contact_tags ?? []).map((ct) =>
-                        ct.tags ? (
-                          <Badge
-                            key={ct.tag_id}
-                            style={{
-                              background: `${ct.tags.color}22`,
-                              color: ct.tags.color,
-                              borderColor: `${ct.tags.color}55`,
-                            }}
-                          >
-                            {ct.tags.name}
-                          </Badge>
-                        ) : null,
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
+              {conversations.map((c) => (
+                <ConversationListItem
+                  key={c.id}
+                  conversation={c}
+                  isActive={c.id === highlightedId}
+                  assigneeName={
+                    c.assignee_id ? (agentNames.get(c.assignee_id) ?? null) : null
+                  }
+                  showInboxName={showInboxNames}
+                  onOpen={handleOpenConversation}
+                  onIntent={schedulePrefetch}
+                  onIntentEnd={cancelPrefetch}
+                />
+              ))}
               <div ref={loadMoreSentinelRef} className="h-1 w-full" aria-hidden />
               {hasMoreConversations ? (
                 <div className="flex justify-center p-3">
@@ -1775,20 +1774,51 @@ export function InboxView({
         </section>
 
         <section className="chat-pane chat-pane-thread min-h-0">
-          {active ? (
+          {threadLoadFailed && activeId && messages.length === 0 ? (
+            <div
+              role="alert"
+              className="m-auto flex flex-col items-center gap-3 p-6 text-center text-sm text-[var(--muted)]"
+            >
+              <p>No se pudo cargar esta conversación.</p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={retryThreadLoad}
+                >
+                  Reintentar
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={backToList}
+                  className="app-nav-toggle"
+                >
+                  Volver
+                </Button>
+              </div>
+            </div>
+          ) : active ? (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <header className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2.5 sm:px-4 sm:py-3">
-                <div className="flex min-w-0 items-center gap-2">
+              <header className="chat-thread-header flex shrink-0 items-center justify-between gap-2 px-2 py-2 sm:px-4">
+                <div className="flex min-w-0 items-center gap-2.5">
                   <button
                     type="button"
                     onClick={backToList}
-                    className="app-nav-toggle h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                    className="app-nav-toggle h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--ink)] hover:bg-[var(--surface-3)]"
                     aria-label="Volver a conversaciones"
                   >
                     <ArrowLeft className="h-5 w-5" />
                   </button>
+                  <Avatar
+                    name={active.contacts?.name}
+                    seed={active.contacts?.id ?? active.id}
+                    size="sm"
+                  />
                   <div className="min-w-0">
-                    <h2 className="truncate text-base font-bold">
+                    <h2 className="truncate text-[15px] font-semibold">
                       {active.contacts?.name || active.contacts?.phone_number}
                     </h2>
                     <p className="truncate text-xs text-[var(--muted)]">
@@ -1828,17 +1858,12 @@ export function InboxView({
                 canText={canText}
                 windowHint={windowHint}
                 contactPhone={active.contacts?.phone_number}
-                text={text}
-                onTextChange={setText}
-                onSend={() => sendTextOptimistic()}
+                onSendText={sendTextOptimistic}
                 onSofiaAction={(action) => void runSofiaAction(action)}
                 sofiaPending={sofiaPending}
                 onSendMedia={sendMediaFile}
                 mediaSending={mediaSending}
-                onComposerKeyDown={handleComposerKeyDown}
                 composerRef={composerRef}
-                onInsertEmoji={insertEmoji}
-                onResizeComposer={resizeComposer}
                 replyTo={replyTo}
                 onReplyTo={setReplyTo}
                 sofiaStoppedAll={sofiaStoppedAll}

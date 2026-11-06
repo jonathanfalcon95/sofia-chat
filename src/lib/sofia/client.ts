@@ -168,6 +168,7 @@ async function sofiaRequest(input: {
       },
       body: input.body ? JSON.stringify(input.body) : undefined,
       cache: "no-store",
+      signal: AbortSignal.timeout(input.method === "GET" ? 5000 : 15000),
     });
   } catch {
     throw new SofiaRequestError("No se pudo contactar la API de Sofia", 502);

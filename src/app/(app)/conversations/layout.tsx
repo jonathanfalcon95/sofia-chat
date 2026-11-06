@@ -23,6 +23,7 @@ export default async function ConversationsLayout({
       companies={data.companies}
       initialCompanyId={data.initialCompanyId}
       showCompanyFilter={data.showCompanyFilter}
+      initialListLoadFailed={data.listLoadFailed}
     >
       {children}
     </InboxView>
