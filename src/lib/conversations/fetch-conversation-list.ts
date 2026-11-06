@@ -1,8 +1,12 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { ilikePattern } from "@/lib/pagination";
+import type { Db } from "@/lib/db/types";
+import {
+  findConversationForList,
+  listContactIdsByTag,
+  listConversationsPage,
+  searchContactIdsByNameOrPhone,
+} from "@/lib/db/repos/conversations";
 import { normalizeConversations } from "./normalize";
 import {
-  CONVERSATION_LIST_SELECT,
   CONVERSATION_PAGE_SIZE,
   type AssigneeFilter,
   type ConversationRow,
@@ -34,7 +38,7 @@ export type ConversationListPage = {
 };
 
 async function resolveSearchContactIds(
-  supabase: SupabaseClient,
+  db: Db,
   phoneSearch: string,
   companyId?: string,
 ): Promise<{ contactIds: string[] | null; empty: boolean }> {
@@ -42,33 +46,22 @@ async function resolveSearchContactIds(
   const digits = phoneSearch.replace(/\D/g, "");
   if (!query && !digits) return { contactIds: null, empty: false };
 
-  const pattern = ilikePattern(query || digits);
-  const orParts = [`name.ilike."${pattern}"`, `phone_number.ilike."${pattern}"`];
-  if (digits && digits !== query) {
-    orParts.push(`phone_number.ilike."%${digits.replace(/[%_,."'\\()]/g, "")}%"`);
-  }
-
-  let contactsQuery = supabase
-    .from("contacts")
-    .select("id")
-    .or(orParts.join(","));
-  if (companyId) contactsQuery = contactsQuery.eq("company_id", companyId);
-
-  const { data, error } = await contactsQuery.limit(500);
+  const { data, error } = await searchContactIdsByNameOrPhone(
+    db,
+    query,
+    digits,
+    companyId,
+  );
   if (error) throw new Error(`Conversation search: ${error.message}`);
   const contactIds = (data ?? []).map((c) => c.id as string);
   return { contactIds, empty: contactIds.length === 0 };
 }
 
 async function resolveTagContactIds(
-  supabase: SupabaseClient,
+  db: Db,
   contactTagId: string,
 ): Promise<{ contactIds: string[]; empty: boolean }> {
-  const { data, error } = await supabase
-    .from("contact_tags")
-    .select("contact_id")
-    .eq("tag_id", contactTagId)
-    .limit(2000);
+  const { data, error } = await listContactIdsByTag(db, contactTagId);
   if (error) throw new Error(`Conversation tag filter: ${error.message}`);
   const contactIds = [
     ...new Set((data ?? []).map((r) => r.contact_id as string)),
@@ -77,10 +70,11 @@ async function resolveTagContactIds(
 }
 
 /**
- * Shared paginated conversation list query for SSR and client reload/load-more.
+ * Shared paginated conversation list query for SSR and the /api/conversations
+ * route the browser reloads and loads more through.
  */
 export async function fetchConversationListPage(
-  supabase: SupabaseClient,
+  db: Db,
   filters: ConversationListFilters = {},
 ): Promise<ConversationListPage> {
   const pageSize = filters.pageSize ?? CONVERSATION_PAGE_SIZE;
@@ -88,14 +82,14 @@ export async function fetchConversationListPage(
   let contactIdsFilter: string[] | null = null;
 
   if (filters.contactTagId) {
-    const tagged = await resolveTagContactIds(supabase, filters.contactTagId);
+    const tagged = await resolveTagContactIds(db, filters.contactTagId);
     if (tagged.empty) return { conversations: [], hasMore: false };
     contactIdsFilter = tagged.contactIds;
   }
 
   if (filters.phoneSearch?.trim()) {
     const searched = await resolveSearchContactIds(
-      supabase,
+      db,
       filters.phoneSearch,
       filters.companyId,
     );
@@ -113,33 +107,15 @@ export async function fetchConversationListPage(
     }
   }
 
-  let query = supabase
-    .from("conversations")
-    .select(CONVERSATION_LIST_SELECT)
-    .order("last_message_at", { ascending: false, nullsFirst: false })
-    .limit(pageSize + 1);
-
-  if (filters.assigneeId) {
-    query = query.eq("assignee_id", filters.assigneeId);
-  } else if (filters.assignee === "mine" && filters.currentUserId) {
-    query = query.eq("assignee_id", filters.currentUserId);
-  } else if (filters.assignee === "unassigned") {
-    query = query.is("assignee_id", null);
-  }
-
-  if (contactIdsFilter) {
-    query = query.in("contact_id", contactIdsFilter);
-  }
-
-  if (filters.companyId) {
-    query = query.eq("company_id", filters.companyId);
-  }
-
-  if (filters.before) {
-    query = query.lt("last_message_at", filters.before);
-  }
-
-  const { data, error } = await query;
+  const { data, error } = await listConversationsPage(db, {
+    assignee: filters.assignee,
+    currentUserId: filters.currentUserId,
+    assigneeId: filters.assigneeId,
+    contactIds: contactIdsFilter,
+    companyId: filters.companyId,
+    before: filters.before,
+    limit: pageSize + 1,
+  });
   if (error) throw new Error(`Conversation list: ${error.message}`);
 
   const rows = data ?? [];
@@ -162,15 +138,11 @@ export {
 
 /** Null means no such row (or no access); a failed query throws instead. */
 export async function fetchConversationById(
-  supabase: SupabaseClient,
+  db: Db,
   conversationId: string,
 ): Promise<ConversationRow | null> {
   if (!conversationId) return null;
-  const { data, error } = await supabase
-    .from("conversations")
-    .select(CONVERSATION_LIST_SELECT)
-    .eq("id", conversationId)
-    .maybeSingle();
+  const { data, error } = await findConversationForList(db, conversationId);
   if (error) throw new Error(`Conversation detail: ${error.message}`);
   if (!data) return null;
   return (

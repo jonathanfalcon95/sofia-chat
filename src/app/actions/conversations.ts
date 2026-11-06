@@ -1,6 +1,30 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { getUserDb } from "@/lib/db/client";
+import {
+  addConversationTag,
+  findActiveMembershipWithRole,
+  findInboxForNewConversation,
+  getConversationCompany,
+  listConversationTagsWithKanbanFlag,
+  removeConversationTags,
+  setConversationAssignee,
+  upsertContactByPhone,
+  upsertOpenConversation,
+} from "@/lib/db/repos/conversations";
+import {
+  insertConversationNote,
+  removeConversationNote,
+} from "@/lib/db/repos/notes";
+import {
+  getTicketOwnership,
+  insertTicket,
+  setTicketAssignee,
+  setTicketContent,
+  setTicketStatus,
+  setTicketSupportResponse,
+} from "@/lib/db/repos/tickets";
 import { createClient } from "@/lib/supabase/server";
 import {
   getAppSession,
@@ -18,29 +42,19 @@ export async function assignConversation(
   } = await supabase.auth.getUser();
   if (!user) throw new Error("No autenticado");
 
-  const { data: conversation, error: convError } = await supabase
-    .from("conversations")
-    .select("id, company_id")
-    .eq("id", conversationId)
-    .single();
+  const { data: conversation, error: convError } = await getConversationCompany(
+    supabase,
+    conversationId,
+  );
   if (convError || !conversation) throw new Error("Conversación no encontrada");
 
   if (assigneeId) {
-    const { data: membership } = await supabase
-      .from("company_memberships")
-      .select(
-        `
-        id,
-        membership_roles!inner (
-          roles!inner ( name )
-        )
-      `,
-      )
-      .eq("user_id", assigneeId)
-      .eq("company_id", conversation.company_id)
-      .eq("is_active", true)
-      .eq("membership_roles.roles.name", "Agente")
-      .maybeSingle();
+    const { data: membership } = await findActiveMembershipWithRole(
+      supabase,
+      assigneeId,
+      conversation.company_id,
+      "Agente",
+    );
     if (!membership) {
       throw new Error(
         "Solo puedes asignar la conversación a un agente de la misma empresa",
@@ -48,22 +62,23 @@ export async function assignConversation(
     }
   }
 
-  const { error } = await supabase
-    .from("conversations")
-    .update({ assignee_id: assigneeId })
-    .eq("id", conversationId);
+  const { error } = await setConversationAssignee(
+    supabase,
+    conversationId,
+    assigneeId,
+  );
   if (error) throw new Error(error.message);
   revalidatePath("/conversations");
   revalidatePath(`/conversations/${conversationId}`);
 }
 
 export async function setConversationTag(conversationId: string, tagId: string) {
-  const supabase = await createClient();
+  const db = await getUserDb();
   // Remove previous kanban tags then insert
-  const { data: current } = await supabase
-    .from("conversation_tags")
-    .select("tag_id, tags!inner(is_kanban_column)")
-    .eq("conversation_id", conversationId);
+  const { data: current } = await listConversationTagsWithKanbanFlag(
+    db,
+    conversationId,
+  );
 
   const kanbanTagIds =
     current
@@ -74,17 +89,10 @@ export async function setConversationTag(conversationId: string, tagId: string) 
       .map((row) => row.tag_id) ?? [];
 
   if (kanbanTagIds.length) {
-    await supabase
-      .from("conversation_tags")
-      .delete()
-      .eq("conversation_id", conversationId)
-      .in("tag_id", kanbanTagIds);
+    await removeConversationTags(db, conversationId, kanbanTagIds);
   }
 
-  const { error } = await supabase.from("conversation_tags").insert({
-    conversation_id: conversationId,
-    tag_id: tagId,
-  });
+  const { error } = await addConversationTag(db, conversationId, tagId);
   if (error) throw new Error(error.message);
   revalidatePath("/kanban");
   revalidatePath("/conversations");
@@ -101,16 +109,12 @@ export async function addConversationNote(conversationId: string, companyId: str
   const trimmed = body.trim();
   if (!trimmed) throw new Error("La nota no puede estar vacía");
 
-  const { data, error } = await supabase
-    .from("conversation_notes")
-    .insert({
-      conversation_id: conversationId,
-      company_id: companyId,
-      author_id: user.id,
-      body: trimmed,
-    })
-    .select("id, body, created_at, profiles(full_name, email)")
-    .single();
+  const { data, error } = await insertConversationNote(supabase, {
+    conversationId,
+    companyId,
+    authorId: user.id,
+    body: trimmed,
+  });
   if (error) throw new Error(error.message);
   revalidatePath(`/conversations/${conversationId}`);
   return data;
@@ -123,11 +127,11 @@ export async function deleteConversationNote(noteId: string, conversationId: str
   } = await supabase.auth.getUser();
   if (!user) throw new Error("unauthorized");
 
-  const { error } = await supabase
-    .from("conversation_notes")
-    .delete()
-    .eq("id", noteId)
-    .eq("conversation_id", conversationId);
+  const { error } = await removeConversationNote(
+    supabase,
+    noteId,
+    conversationId,
+  );
   if (error) throw new Error(error.message);
   revalidatePath(`/conversations/${conversationId}`);
 }
@@ -145,7 +149,7 @@ export async function createTicket(input: {
     throw new Error("No tienes permiso para crear tickets");
   }
 
-  const supabase = await createClient();
+  const db = await getUserDb();
   const title = input.title.trim();
   const description = input.description.trim();
   if (!title) throw new Error("El título es obligatorio");
@@ -156,15 +160,13 @@ export async function createTicket(input: {
     throw new Error("Prioridad inválida");
   }
 
-  // Agents escalate to the support queue — never assign from create.
-  const { error } = await supabase.from("tickets").insert({
-    company_id: input.companyId,
-    conversation_id: input.conversationId,
+  const { error } = await insertTicket(db, {
+    companyId: input.companyId,
+    conversationId: input.conversationId,
     title,
     description,
     priority,
-    assignee_id: null,
-    created_by: session.userId,
+    createdBy: session.userId,
   });
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
@@ -172,12 +174,8 @@ export async function createTicket(input: {
 }
 
 async function getTicketOrThrow(ticketId: string) {
-  const supabase = await createClient();
-  const { data: ticket, error } = await supabase
-    .from("tickets")
-    .select("id, company_id, created_by, conversation_id")
-    .eq("id", ticketId)
-    .single();
+  const db = await getUserDb();
+  const { data: ticket, error } = await getTicketOwnership(db, ticketId);
   if (error || !ticket) throw new Error("Ticket no encontrado");
   return ticket;
 }
@@ -211,15 +209,12 @@ export async function updateTicketContent(
     throw new Error("Prioridad inválida");
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("tickets")
-    .update({
-      title,
-      description,
-      priority: input.priority,
-    })
-    .eq("id", ticketId);
+  const db = await getUserDb();
+  const { error } = await setTicketContent(db, ticketId, {
+    title,
+    description,
+    priority: input.priority,
+  });
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
 }
@@ -236,11 +231,8 @@ export async function updateTicketStatus(ticketId: string, status: string) {
     throw new Error("Solo soporte puede cambiar el estado del ticket");
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("tickets")
-    .update({ status })
-    .eq("id", ticketId);
+  const db = await getUserDb();
+  const { error } = await setTicketStatus(db, ticketId, status);
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
 }
@@ -257,23 +249,14 @@ export async function updateTicketAssignee(
     throw new Error("Solo soporte puede asignar tickets");
   }
 
-  const supabase = await createClient();
+  const db = await getUserDb();
   if (assigneeId) {
-    const { data: membership } = await supabase
-      .from("company_memberships")
-      .select(
-        `
-        id,
-        membership_roles!inner (
-          roles!inner ( name )
-        )
-      `,
-      )
-      .eq("user_id", assigneeId)
-      .eq("company_id", ticket.company_id)
-      .eq("is_active", true)
-      .eq("membership_roles.roles.name", "Soporte")
-      .maybeSingle();
+    const { data: membership } = await findActiveMembershipWithRole(
+      db,
+      assigneeId,
+      ticket.company_id,
+      "Soporte",
+    );
 
     if (!membership) {
       throw new Error(
@@ -282,10 +265,7 @@ export async function updateTicketAssignee(
     }
   }
 
-  const { error } = await supabase
-    .from("tickets")
-    .update({ assignee_id: assigneeId })
-    .eq("id", ticketId);
+  const { error } = await setTicketAssignee(db, ticketId, assigneeId);
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
 }
@@ -306,15 +286,12 @@ export async function updateTicketSupportResponse(
   const body = response.trim();
   if (!body) throw new Error("La respuesta no puede estar vacía");
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("tickets")
-    .update({
-      support_response: body,
-      support_responded_at: new Date().toISOString(),
-      support_responded_by: session.userId,
-    })
-    .eq("id", ticketId);
+  const db = await getUserDb();
+  const { error } = await setTicketSupportResponse(db, ticketId, {
+    body,
+    respondedAt: new Date().toISOString(),
+    respondedBy: session.userId,
+  });
   if (error) throw new Error(error.message);
   revalidatePath("/tickets");
 }
@@ -332,45 +309,35 @@ export async function startConversationWithTemplate(input: {
   } = await supabase.auth.getUser();
   if (!user) throw new Error("unauthorized");
 
-  const { data: inbox } = await supabase
-    .from("inboxes")
-    .select("id, company_id, phone_number")
-    .eq("id", input.inboxId)
-    .single();
+  const { data: inbox } = await findInboxForNewConversation(
+    supabase,
+    input.inboxId,
+  );
   if (!inbox) throw new Error("inbox_not_found");
 
   const phone = input.contactPhone.startsWith("+")
     ? input.contactPhone
     : `+${input.contactPhone}`;
 
-  const { data: contact, error: contactError } = await supabase
-    .from("contacts")
-    .upsert(
-      {
-        company_id: inbox.company_id,
-        phone_number: phone,
-        name: input.contactName || phone,
-      },
-      { onConflict: "company_id,phone_number" },
-    )
-    .select("id")
-    .single();
+  const { data: contact, error: contactError } = await upsertContactByPhone(
+    supabase,
+    {
+      companyId: inbox.company_id,
+      phoneNumber: phone,
+      name: input.contactName || phone,
+    },
+  );
   if (contactError || !contact) throw new Error(contactError?.message ?? "contact_failed");
 
-  const { data: conversation, error: convError } = await supabase
-    .from("conversations")
-    .upsert(
-      {
-        company_id: inbox.company_id,
-        inbox_id: inbox.id,
-        contact_id: contact.id,
-        status: "open",
-        assignee_id: user.id,
-      },
-      { onConflict: "inbox_id,contact_id" },
-    )
-    .select("id")
-    .single();
+  const { data: conversation, error: convError } = await upsertOpenConversation(
+    supabase,
+    {
+      companyId: inbox.company_id,
+      inboxId: inbox.id,
+      contactId: contact.id,
+      assigneeId: user.id,
+    },
+  );
   if (convError || !conversation) throw new Error(convError?.message ?? "conversation_failed");
 
   return { conversationId: conversation.id as string };

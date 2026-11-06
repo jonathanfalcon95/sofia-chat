@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { findConversationInbox, findInboxId } from "@/lib/db/repos/messaging";
 import { listWhatsAppTemplates } from "@/lib/ycloud/client";
 import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 
@@ -18,11 +19,10 @@ export async function GET(request: Request) {
 
   let resolvedInboxId = inboxId;
   if (!resolvedInboxId && conversationId) {
-    const { data: conversation } = await supabase
-      .from("conversations")
-      .select("inbox_id")
-      .eq("id", conversationId)
-      .maybeSingle();
+    const { data: conversation } = await findConversationInbox(
+      supabase,
+      conversationId,
+    );
     resolvedInboxId = conversation?.inbox_id ?? null;
   }
 
@@ -35,11 +35,7 @@ export async function GET(request: Request) {
 
   // Credentials load with the service role, so check access with the user's
   // client first; RLS hides inboxes the user can't reach.
-  const { data: inbox } = await supabase
-    .from("inboxes")
-    .select("id")
-    .eq("id", resolvedInboxId)
-    .maybeSingle();
+  const { data: inbox } = await findInboxId(supabase, resolvedInboxId);
   if (!inbox) {
     return NextResponse.json({ error: "forbidden", items: [] }, { status: 403 });
   }

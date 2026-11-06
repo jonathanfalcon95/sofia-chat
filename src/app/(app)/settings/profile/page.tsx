@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { listInboxNamesByIds } from "@/lib/db/repos/inboxes";
 import {
   getAppSession,
   sessionShowsAssignedCompanies,
@@ -12,12 +13,12 @@ export default async function ProfilePage() {
   if (!session) redirect("/login");
 
   const showAssignedCompanies = sessionShowsAssignedCompanies(session);
-  const supabase = await createClient();
+  const db = await getUserDb();
   const inboxIds = Array.from(
     new Set(session.memberships.flatMap((m) => m.inboxIds)),
   );
   const { data: inboxRows } = inboxIds.length
-    ? await supabase.from("inboxes").select("id, name").in("id", inboxIds)
+    ? await listInboxNamesByIds(db, inboxIds)
     : { data: [] as Array<{ id: string; name: string }> };
   const inboxNameMap = new Map((inboxRows ?? []).map((i) => [i.id, i.name]));
 

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getSystemDb, getUserDb } from "@/lib/db/client";
+import {
+  getConversationForSending,
+  getMessageForReaction,
+  updateMessageReactions,
+} from "@/lib/db/repos/messaging";
 import { sendWhatsAppReaction } from "@/lib/ycloud/client";
 import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { isWithinCustomerWindow } from "@/lib/utils";
@@ -12,7 +16,7 @@ import { logSystemError } from "@/lib/errors/log-system-error";
 import type { MessageReaction } from "@/lib/conversations/types";
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
+  const supabase = await getUserDb();
   const session = await getAppSession();
   if (!session) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -26,17 +30,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing_params" }, { status: 400 });
   }
 
-  const { data: conversation, error } = await supabase
-    .from("conversations")
-    .select(
-      `
-      id, company_id, window_expires_at, inbox_id,
-      inboxes ( phone_number ),
-      contacts ( phone_number )
-    `,
-    )
-    .eq("id", conversationId)
-    .single();
+  const { data: conversation, error } = await getConversationForSending(
+    supabase,
+    conversationId,
+  );
 
   if (error || !conversation) {
     return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
@@ -87,13 +84,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const admin = createAdminClient();
-  const { data: target, error: targetError } = await admin
-    .from("messages")
-    .select("id, wamid, ycloud_message_id, reactions")
-    .eq("id", messageId)
-    .eq("conversation_id", conversationId)
-    .single();
+  const admin = getSystemDb();
+  const { data: target, error: targetError } = await getMessageForReaction(
+    admin,
+    messageId,
+    conversationId,
+  );
 
   if (targetError || !target) {
     return NextResponse.json({ error: "message_not_found" }, { status: 404 });
@@ -141,12 +137,11 @@ export async function POST(request: Request) {
             },
           ];
 
-    const { data: updated, error: updateError } = await admin
-      .from("messages")
-      .update({ reactions: next })
-      .eq("id", messageId)
-      .select("*")
-      .single();
+    const { data: updated, error: updateError } = await updateMessageReactions(
+      admin,
+      messageId,
+      next,
+    );
 
     if (updateError) {
       throw new Error(updateError.message);

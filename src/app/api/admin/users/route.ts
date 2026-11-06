@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { createAdminClient, hasServiceRole } from "@/lib/supabase/admin";
+import { getSystemDb, hasServiceRole } from "@/lib/db/client";
+import { listActiveCompanyInboxIds } from "@/lib/db/repos/inboxes";
+import {
+  insertMembership,
+  insertMembershipInboxes,
+  insertMembershipRole,
+} from "@/lib/db/repos/memberships";
+import { findCompanyRole } from "@/lib/db/repos/roles";
 import { getAppSession, sessionHasPermission } from "@/lib/rbac/session";
 
 export async function POST(request: Request) {
@@ -49,15 +56,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const admin = createAdminClient();
+  const admin = getSystemDb();
 
   // Validate inboxes belong to the company and are active
-  const { data: validInboxes, error: inboxCheckError } = await admin
-    .from("inboxes")
-    .select("id")
-    .eq("company_id", companyId)
-    .eq("is_active", true)
-    .in("id", inboxIds);
+  const { data: validInboxes, error: inboxCheckError } =
+    await listActiveCompanyInboxIds(admin, companyId, inboxIds);
 
   if (inboxCheckError) {
     return NextResponse.json({ error: inboxCheckError.message }, { status: 500 });
@@ -71,12 +74,11 @@ export async function POST(request: Request) {
   }
 
   if (roleId) {
-    const { data: role, error: roleCheckError } = await admin
-      .from("roles")
-      .select("id")
-      .eq("id", roleId)
-      .eq("company_id", companyId)
-      .maybeSingle();
+    const { data: role, error: roleCheckError } = await findCompanyRole(
+      admin,
+      roleId,
+      companyId,
+    );
 
     if (roleCheckError) {
       return NextResponse.json({ error: roleCheckError.message }, { status: 500 });
@@ -105,15 +107,14 @@ export async function POST(request: Request) {
   }
 
   // Use service role for membership writes (avoid silent RLS failures)
-  const { data: membership, error: membershipError } = await admin
-    .from("company_memberships")
-    .insert({
+  const { data: membership, error: membershipError } = await insertMembership(
+    admin,
+    {
       company_id: companyId,
       user_id: created.user.id,
       is_active: true,
-    })
-    .select("id")
-    .single();
+    },
+  );
 
   if (membershipError || !membership) {
     return NextResponse.json(
@@ -123,7 +124,7 @@ export async function POST(request: Request) {
   }
 
   if (roleId) {
-    const { error: roleError } = await admin.from("membership_roles").insert({
+    const { error: roleError } = await insertMembershipRole(admin, {
       membership_id: membership.id,
       role_id: roleId,
     });
@@ -132,7 +133,8 @@ export async function POST(request: Request) {
     }
   }
 
-  const { error: inboxAssignError } = await admin.from("membership_inboxes").insert(
+  const { error: inboxAssignError } = await insertMembershipInboxes(
+    admin,
     inboxIds.map((inboxId) => ({
       membership_id: membership.id,
       inbox_id: inboxId,

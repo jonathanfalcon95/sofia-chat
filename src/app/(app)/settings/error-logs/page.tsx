@@ -1,11 +1,12 @@
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import {
+  listCompaniesForErrorLogFilter,
+  listErrorLogSources,
+  listErrorLogsPage,
+} from "@/lib/db/repos/errors";
 import { requireAnyPermission } from "@/lib/rbac/require-permission";
 import { ErrorLogsManager } from "@/components/error-logs/error-logs-manager";
-import {
-  firstSearchParam,
-  ilikePattern,
-  parsePageParams,
-} from "@/lib/pagination";
+import { firstSearchParam, parsePageParams } from "@/lib/pagination";
 
 export default async function ErrorLogsPage({
   searchParams,
@@ -21,50 +22,26 @@ export default async function ErrorLogsPage({
   const level = firstSearchParam(sp.level) ?? "all";
   const source = firstSearchParam(sp.source) ?? "all";
 
-  const supabase = await createClient();
+  const supabase = await getUserDb();
 
   const [{ data: companies }, { data: sourceRows }] = await Promise.all([
-    supabase
-      .from("companies")
-      .select("id, name")
-      .order("name", { ascending: true }),
-    supabase.from("error_logs").select("source").limit(1000),
+    listCompaniesForErrorLogFilter(supabase),
+    listErrorLogSources(supabase),
   ]);
 
   const sources = Array.from(
     new Set((sourceRows ?? []).map((r) => r.source as string).filter(Boolean)),
   ).sort();
 
-  let query = supabase
-    .from("error_logs")
-    .select(
-      `
-      id, created_at, updated_at, level, status, source, message,
-      error_name, error_code, http_status, stack, context,
-      company_id, user_id, request_id,
-      resolved_at, resolved_by, resolution_note,
-      companies ( id, name ),
-      actor:profiles!error_logs_user_id_fkey ( full_name, email ),
-      resolver:profiles!error_logs_resolved_by_fkey ( full_name, email )
-    `,
-      { count: "exact" },
-    )
-    .order("created_at", { ascending: false });
-
-  if (companyId === "none") query = query.is("company_id", null);
-  else if (companyId !== "all" && companyId)
-    query = query.eq("company_id", companyId);
-  if (status !== "all") query = query.eq("status", status);
-  if (level !== "all") query = query.eq("level", level);
-  if (source !== "all" && source) query = query.eq("source", source);
-  if (q) {
-    const pattern = ilikePattern(q);
-    query = query.or(
-      `message.ilike."${pattern}",source.ilike."${pattern}",error_code.ilike."${pattern}",error_name.ilike."${pattern}",request_id.ilike."${pattern}"`,
-    );
-  }
-
-  const { data: logs, count } = await query.range(from, to);
+  const { data: logs, count } = await listErrorLogsPage(supabase, {
+    companyId,
+    status,
+    level,
+    source,
+    q,
+    from,
+    to,
+  });
 
   const normalized = (logs ?? []).map((row) => {
     const company = Array.isArray(row.companies)

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { updateProfileFullName } from "@/lib/db/repos/profiles";
 import { createClient } from "@/lib/supabase/server";
 import { getAppSession } from "@/lib/rbac/session";
 
@@ -12,10 +13,11 @@ export async function updateMyProfile(fullName: string) {
   if (!name) throw new Error("El nombre es obligatorio");
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("profiles")
-    .update({ full_name: name })
-    .eq("id", session.userId);
+  const { error } = await updateProfileFullName(
+    supabase,
+    session.userId,
+    name,
+  );
 
   if (error) throw new Error(error.message);
 

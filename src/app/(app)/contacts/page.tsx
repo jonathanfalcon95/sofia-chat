@@ -1,16 +1,18 @@
-import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
+import { getSystemDb, getUserDb } from "@/lib/db/client";
+import {
+  listCompaniesForContactFilter,
+  listContactIdsByTag,
+  listContactIdsPage,
+  listContactsByIds,
+  listContactTagOptions,
+} from "@/lib/db/repos/contacts";
 import {
   getAppSession,
   sessionCompanyIds,
   sessionHasAnyPermission,
 } from "@/lib/rbac/session";
 import { ContactsManager } from "@/components/contacts/contacts-manager";
-import {
-  firstSearchParam,
-  ilikePattern,
-  parsePageParams,
-} from "@/lib/pagination";
+import { firstSearchParam, parsePageParams } from "@/lib/pagination";
 
 export default async function ContactsPage({
   searchParams,
@@ -24,22 +26,15 @@ export default async function ContactsPage({
   const companyId = firstSearchParam(sp.companyId) ?? "";
   const tagId = firstSearchParam(sp.tagId) ?? "";
 
-  const supabase = await createClient();
+  const supabase = await getUserDb();
   const [{ data: contactTags }, { data: companies }] = await Promise.all([
-    supabase
-      .from("tags")
-      .select("id, name, color, company_id")
-      .eq("is_kanban_column", false)
-      .order("name"),
-    supabase.from("companies").select("id, name").order("name"),
+    listContactTagOptions(supabase),
+    listCompaniesForContactFilter(supabase),
   ]);
 
   let contactIdsByTag: string[] | null = null;
   if (tagId) {
-    const { data: tagged } = await supabase
-      .from("contact_tags")
-      .select("contact_id")
-      .eq("tag_id", tagId);
+    const { data: tagged } = await listContactIdsByTag(supabase, tagId);
     contactIdsByTag = (tagged ?? []).map((t) => t.contact_id as string);
     if (contactIdsByTag.length === 0) {
       const canManageTags = Boolean(
@@ -71,37 +66,24 @@ export default async function ContactsPage({
   // page by id within the user's companies; the details below still go through
   // RLS, so nothing beyond the total is read on the user's behalf.
   const scopedCompanyIds = session ? sessionCompanyIds(session) : [];
-  let idsQuery = createAdminClient()
-    .from("contacts")
-    .select("id", { count: "exact" })
-    .order("created_at", { ascending: false });
-  if (scopedCompanyIds) idsQuery = idsQuery.in("company_id", scopedCompanyIds);
-  if (companyId) idsQuery = idsQuery.eq("company_id", companyId);
-  if (contactIdsByTag) idsQuery = idsQuery.in("id", contactIdsByTag);
-  if (q) {
-    const pattern = ilikePattern(q);
-    idsQuery = idsQuery.or(
-      `name.ilike."${pattern}",phone_number.ilike."${pattern}"`,
-    );
-  }
-
-  const { data: idRows, count, error: idsError } = await idsQuery.range(from, to);
+  const {
+    data: idRows,
+    count,
+    error: idsError,
+  } = await listContactIdsPage(getSystemDb(), {
+    scopedCompanyIds,
+    companyId,
+    contactIds: contactIdsByTag,
+    q,
+    from,
+    to,
+  });
   if (idsError) throw new Error(`Contacts page: ${idsError.message}`);
 
-  const { data: contacts, error: contactsError } = await supabase
-    .from("contacts")
-    .select(
-      `
-      id, name, phone_number, company_id,
-      companies(name),
-      contact_tags ( tag_id, tags ( id, name, color, is_kanban_column ) )
-    `,
-    )
-    .in(
-      "id",
-      (idRows ?? []).map((row) => row.id as string),
-    )
-    .order("created_at", { ascending: false });
+  const { data: contacts, error: contactsError } = await listContactsByIds(
+    supabase,
+    (idRows ?? []).map((row) => row.id as string),
+  );
   if (contactsError) throw new Error(`Contacts page: ${contactsError.message}`);
 
   const normalized =

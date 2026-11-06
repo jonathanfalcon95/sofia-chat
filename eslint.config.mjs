@@ -11,7 +11,7 @@ const eslintConfig = defineConfig([
     ignores: ["src/lib/db/**", "src/lib/supabase/**"],
     rules: {
       "no-restricted-syntax": [
-        "warn",
+        "error",
         {
           selector:
             "CallExpression[callee.property.name='from'][arguments.0.type='Literal'][callee.object.name!='Buffer'][callee.object.name!='Array']",

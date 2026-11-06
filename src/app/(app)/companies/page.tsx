@@ -1,4 +1,6 @@
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { listCompaniesPage } from "@/lib/db/repos/companies";
+import { listAllInboxes } from "@/lib/db/repos/inboxes";
 import { requireAnyPermission } from "@/lib/rbac/require-permission";
 import { CompaniesManager } from "@/components/companies/companies-manager";
 import {
@@ -19,12 +21,9 @@ export default async function CompaniesPage({
   const status = firstSearchParam(sp.status) ?? "all";
   const numbers = firstSearchParam(sp.numbers) ?? "all";
 
-  const supabase = await createClient();
+  const db = await getUserDb();
 
-  const { data: allInboxes } = await supabase
-    .from("inboxes")
-    .select("id, name, phone_number, company_id, is_active")
-    .order("name");
+  const { data: allInboxes } = await listAllInboxes(db);
 
   const companyIdsWithInboxes = [
     ...new Set(
@@ -34,47 +33,31 @@ export default async function CompaniesPage({
     ),
   ];
 
-  let query = supabase
-    .from("companies")
-    .select("id, name, slug, is_active, guid_company", { count: "exact" })
-    .order("created_at", { ascending: false });
-
-  if (status === "active") query = query.eq("is_active", true);
-  if (status === "inactive") query = query.eq("is_active", false);
-
-  if (q) {
-    const pattern = ilikePattern(q);
-    query = query.or(
-      `name.ilike."${pattern}",slug.ilike."${pattern}",guid_company.ilike."${pattern}"`,
+  if (numbers === "with" && companyIdsWithInboxes.length === 0) {
+    return (
+      <CompaniesManager
+        companies={[]}
+        inboxes={(allInboxes ?? []) as never}
+        canManage={Boolean(session?.isPlatformAdmin)}
+        total={0}
+        page={page}
+        pageSize={pageSize}
+        filters={{ q, status, numbers }}
+      />
     );
   }
 
-  if (numbers === "with") {
-    if (companyIdsWithInboxes.length === 0) {
-      return (
-        <CompaniesManager
-          companies={[]}
-          inboxes={(allInboxes ?? []) as never}
-          canManage={Boolean(session?.isPlatformAdmin)}
-          total={0}
-          page={page}
-          pageSize={pageSize}
-          filters={{ q, status, numbers }}
-        />
-      );
-    }
-    query = query.in("id", companyIdsWithInboxes);
-  } else if (numbers === "without") {
-    if (companyIdsWithInboxes.length > 0) {
-      query = query.not(
-        "id",
-        "in",
-        `(${companyIdsWithInboxes.join(",")})`,
-      );
-    }
-  }
-
-  const { data: companies, count } = await query.range(from, to);
+  const { data: companies, count } = await listCompaniesPage(db, {
+    status,
+    searchPattern: q ? ilikePattern(q) : undefined,
+    includeIds: numbers === "with" ? companyIdsWithInboxes : undefined,
+    excludeIds:
+      numbers === "without" && companyIdsWithInboxes.length > 0
+        ? companyIdsWithInboxes
+        : undefined,
+    from,
+    to,
+  });
 
   const normalized =
     companies?.map((c) => {

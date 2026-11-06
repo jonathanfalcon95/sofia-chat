@@ -26,7 +26,6 @@ import {
   X,
   Building2,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import { cn, isWithinCustomerWindow } from "@/lib/utils";
 import {
   rememberMediaPreview,
@@ -63,19 +62,19 @@ import { ChatNotFound } from "@/components/conversations/chat-not-found";
 import {
   CONVERSATION_PAGE_SIZE,
   MESSAGE_PAGE_SIZE,
-  MESSAGE_SELECT,
   type AssigneeFilter,
   type ConversationRow,
   type MessageRow,
   type NoteRow,
 } from "@/lib/conversations/types";
-import { normalizeNotes } from "@/lib/conversations/normalize";
 import {
   appendConversationListPage,
-  fetchConversationById,
-  fetchConversationListPage,
   mergeConversationListPage,
   upsertConversationInList,
+} from "@/lib/conversations/conversation-list";
+import type {
+  ConversationListFilters,
+  ConversationListPage,
 } from "@/lib/conversations/fetch-conversation-list";
 import {
   durationSince,
@@ -106,6 +105,73 @@ async function fetchSofiaStatus(conversationId: string) {
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Middleware answers a lost session with a redirect to the login page, which
+ * would otherwise read as a successful response.
+ */
+const API_READ: RequestInit = { cache: "no-store", redirect: "error" };
+
+/** Throws on failure: list callers show their own error state. */
+async function fetchConversationPage(
+  filters: Pick<
+    ConversationListFilters,
+    | "assignee"
+    | "assigneeId"
+    | "phoneSearch"
+    | "contactTagId"
+    | "companyId"
+    | "before"
+  >,
+): Promise<ConversationListPage> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) params.set(key, value);
+  }
+  const res = await fetch(`/api/conversations?${params}`, API_READ);
+  if (!res.ok) throw new Error(`Conversation list: ${res.status}`);
+  return (await res.json()) as ConversationListPage;
+}
+
+/** Null means no such row (or no access); a failed request throws instead. */
+async function fetchConversationDetail(
+  conversationId: string,
+): Promise<ConversationRow | null> {
+  const params = new URLSearchParams({ conversationId });
+  const res = await fetch(`/api/conversations/detail?${params}`, API_READ);
+  if (!res.ok) throw new Error(`Conversation detail: ${res.status}`);
+  const body = (await res.json()) as { conversation: ConversationRow | null };
+  return body.conversation;
+}
+
+/** Never rejects, like the query it replaced: failures come back in `error`. */
+async function fetchMessagesPage(
+  conversationId: string,
+  before?: string,
+): Promise<{ data: MessageRow[] | null; error: string | null }> {
+  try {
+    const params = new URLSearchParams({ conversationId });
+    if (before) params.set("before", before);
+    const res = await fetch(`/api/messages?${params}`, API_READ);
+    if (!res.ok) return { data: null, error: `HTTP ${res.status}` };
+    const body = (await res.json()) as { messages: MessageRow[] };
+    return { data: body.messages, error: null };
+  } catch (err) {
+    return { data: null, error: String(err) };
+  }
+}
+
+/** Never rejects, like the query it replaced: a failure reads as no notes. */
+async function fetchNotes(conversationId: string): Promise<NoteRow[]> {
+  try {
+    const params = new URLSearchParams({ conversationId });
+    const res = await fetch(`/api/conversations/notes?${params}`, API_READ);
+    if (!res.ok) return [];
+    return ((await res.json()) as { notes: NoteRow[] }).notes;
+  } catch {
+    return [];
   }
 }
 
@@ -431,8 +497,7 @@ export function InboxView({
       routeFetchRef.current === routeId && !ignoreRouteCompanySyncRef.current;
     void (async () => {
       try {
-        const supabase = createClient();
-        const row = await fetchConversationById(supabase, routeId);
+        const row = await fetchConversationDetail(routeId);
         if (!isCurrent()) return;
         if (!row) {
           setThreadMissing(true);
@@ -499,7 +564,6 @@ export function InboxView({
       }
 
       const run = async () => {
-        const supabase = createClient();
         let nextMode: ReloadMode | null = mode;
         while (nextMode) {
           const currentMode: ReloadMode = nextMode;
@@ -507,14 +571,12 @@ export function InboxView({
           const startedAt = perfNowMs();
           const f = filtersRef.current;
           try {
-            const page = await fetchConversationListPage(supabase, {
+            const page = await fetchConversationPage({
               assignee: f.assigneeFilter,
               assigneeId: f.filterAgentId || undefined,
-              currentUserId: f.currentUserId,
               phoneSearch: f.debouncedPhoneSearch,
               contactTagId: f.filterContactTagId || undefined,
               companyId: f.companyId || undefined,
-              pageSize: CONVERSATION_PAGE_SIZE,
             });
             // Filters changed mid-request: their reload is queued, drop this one.
             if (filtersRef.current === f) {
@@ -601,17 +663,14 @@ export function InboxView({
     }
     setLoadingMoreConversations(true);
     try {
-      const supabase = createClient();
       const f = filtersRef.current;
-      const page = await fetchConversationListPage(supabase, {
+      const page = await fetchConversationPage({
         assignee: f.assigneeFilter,
         assigneeId: f.filterAgentId || undefined,
-        currentUserId: f.currentUserId,
         phoneSearch: f.debouncedPhoneSearch,
         contactTagId: f.filterContactTagId || undefined,
         companyId: f.companyId || undefined,
         before,
-        pageSize: CONVERSATION_PAGE_SIZE,
       });
       setConversations((prev) =>
         appendConversationListPage(prev, page.conversations),
@@ -649,15 +708,19 @@ export function InboxView({
       ),
     );
     // No write (and no realtime event for every subscriber) when already read.
-    void createClient()
-      .from("conversations")
-      .update({ unread_count: 0 })
-      .eq("id", conversationId)
-      .gt("unread_count", 0)
-      .then(({ error }) => {
-        if (error) {
-          console.error("Failed to mark conversation read", error);
+    void fetch("/api/conversations/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId }),
+      redirect: "error",
+    })
+      .then((res) => {
+        if (!res.ok) {
+          console.error("Failed to mark conversation read", res.status);
         }
+      })
+      .catch((err) => {
+        console.error("Failed to mark conversation read", err);
       });
   }, []);
 
@@ -792,15 +855,7 @@ export function InboxView({
     if (notesLoadingForIdRef.current === conversationId) return;
     notesLoadingForIdRef.current = conversationId;
     try {
-      const supabase = createClient();
-      const { data: noteRows } = await supabase
-        .from("conversation_notes")
-        .select("id, body, created_at, profiles(full_name, email)")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: false });
-      const normalized = normalizeNotes(
-        noteRows as Array<Record<string, unknown>> | null,
-      );
+      const normalized = await fetchNotes(conversationId);
       const cached = threadCacheRef.current.get(conversationId);
       threadCacheRef.current.set(conversationId, {
         messages: cached?.messages ?? [],
@@ -824,14 +879,7 @@ export function InboxView({
     if (prefetchInFlightRef.current.has(conversationId)) return;
     prefetchInFlightRef.current.add(conversationId);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("messages")
-        .select(MESSAGE_SELECT)
-        .eq("conversation_id", conversationId)
-        .neq("type", "reaction")
-        .order("created_at", { ascending: false })
-        .limit(MESSAGE_PAGE_SIZE);
+      const { data, error } = await fetchMessagesPage(conversationId);
       // Never cache a failure as an empty thread: it would block every retry.
       if (error) {
         console.error("Failed to prefetch messages", error);
@@ -1102,16 +1150,8 @@ export function InboxView({
     const oldest = messages[0];
     if (!oldest) return;
     setLoadingOlder(true);
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("messages")
-      .select(MESSAGE_SELECT)
-      .eq("conversation_id", activeId)
-      .neq("type", "reaction")
-      .lt("created_at", oldest.created_at)
-      .order("created_at", { ascending: false })
-      .limit(MESSAGE_PAGE_SIZE);
-    const older = ((data as MessageRow[]) ?? []).slice().reverse();
+    const { data } = await fetchMessagesPage(activeId, oldest.created_at);
+    const older =((data as MessageRow[]) ?? []).slice().reverse();
     setHasMoreMessages((data?.length ?? 0) >= MESSAGE_PAGE_SIZE);
     setMessages((prev) => {
       const ids = new Set(prev.map((m) => m.id));

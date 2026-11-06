@@ -1,4 +1,6 @@
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { listCompaniesByName } from "@/lib/db/repos/conversations";
+import { listKanbanColumns, listKanbanInboxes } from "@/lib/db/repos/kanban";
 import { getAppSession } from "@/lib/rbac/session";
 import { KanbanBoard } from "@/components/kanban/kanban-board";
 import { PageHeader } from "@/components/page-header";
@@ -18,9 +20,9 @@ export default async function KanbanPage({
 }) {
   const session = await getAppSession();
   const sp = await searchParams;
-  const supabase = await createClient();
+  const db = await getUserDb();
 
-  const q = (firstSearchParam(sp.q) ?? "").trim();
+  const q =(firstSearchParam(sp.q) ?? "").trim();
   const assigneeRaw = firstSearchParam(sp.assignee) ?? "all";
   const assignee =
     assigneeRaw === "mine" || assigneeRaw === "unassigned"
@@ -31,24 +33,13 @@ export default async function KanbanPage({
   );
   const inboxId = firstSearchParam(sp.inboxId) ?? "";
 
-  const { data: companies } = await supabase
-    .from("companies")
-    .select("id, name")
-    .order("name");
+  const { data: companies } = await listCompaniesByName(db);
   const companyId =
     firstSearchParam(sp.companyId) || companies?.[0]?.id || "";
 
-  let inboxQuery = supabase.from("inboxes").select("id, name, company_id");
-  if (companyId) inboxQuery = inboxQuery.eq("company_id", companyId);
-  const { data: inboxes } = await inboxQuery;
+  const { data: inboxes } = await listKanbanInboxes(db, companyId);
 
-  let tagsQuery = supabase
-    .from("tags")
-    .select("id, name, color, position, company_id")
-    .eq("is_kanban_column", true)
-    .order("position");
-  if (companyId) tagsQuery = tagsQuery.eq("company_id", companyId);
-  const { data: tags } = await tagsQuery;
+  const { data: tags } = await listKanbanColumns(db, companyId);
 
   let cards: Awaited<ReturnType<typeof loadAllKanbanColumns>>["cards"] = [];
   let hasMoreByTag: Record<string, boolean> = {};
@@ -58,7 +49,7 @@ export default async function KanbanPage({
   if (companyId && (tags?.length ?? 0) > 0) {
     try {
       const loaded = await loadAllKanbanColumns(
-        supabase,
+        db,
         {
           companyId,
           inboxId: inboxId || undefined,

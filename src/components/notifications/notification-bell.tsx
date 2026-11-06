@@ -19,6 +19,21 @@ type NotificationItem = {
   read: boolean;
 };
 
+/**
+ * Never rejects, like the queries it replaced: any failure reads as no data.
+ * Middleware answers a lost session with a redirect to the login page, which
+ * would otherwise read as a successful response.
+ */
+async function fetchData<T>(url: string): Promise<T | null> {
+  try {
+    const res = await fetch(url, { cache: "no-store", redirect: "error" });
+    if (!res.ok) return null;
+    return ((await res.json()) as { data: T | null }).data;
+  } catch {
+    return null;
+  }
+}
+
 export function NotificationBell({ userId }: { userId: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -110,12 +125,11 @@ export function NotificationBell({ userId }: { userId: string }) {
 
       let assignee = assigneeCache.current.get(conversationId);
       if (assignee === undefined) {
-        const { data } = await supabase
-          .from("conversations")
-          .select("assignee_id")
-          .eq("id", conversationId)
-          .maybeSingle();
-        assignee = (data?.assignee_id as string | null) ?? null;
+        const params = new URLSearchParams({ conversationId });
+        const data = await fetchData<{ assignee_id: string | null }>(
+          `/api/notifications/conversation-assignee?${params}`,
+        );
+        assignee = data?.assignee_id ?? null;
         assigneeCache.current.set(conversationId, assignee);
       }
 
@@ -144,17 +158,12 @@ export function NotificationBell({ userId }: { userId: string }) {
         supabase.realtime.setAuth(sessionData.session.access_token);
       }
 
-      const { data: convs } = await supabase
-        .from("conversations")
-        .select("id, assignee_id")
-        .eq("assignee_id", userId)
-        .limit(500);
+      const convs = await fetchData<
+        Array<{ id: string; assignee_id: string | null }>
+      >("/api/notifications/assigned-conversations");
       if (cancelled) return;
       for (const row of convs ?? []) {
-        assigneeCache.current.set(
-          row.id as string,
-          (row.assignee_id as string | null) ?? null,
-        );
+        assigneeCache.current.set(row.id, row.assignee_id ?? null);
       }
 
       channel = supabase
@@ -226,19 +235,21 @@ export function NotificationBell({ userId }: { userId: string }) {
   // Safety net: poll only while realtime is not live.
   useEffect(() => {
     if (!userId) return;
-    const supabase = createClient();
     let lastSeen = new Date().toISOString();
 
     const tick = async () => {
-      const { data } = await supabase
-        .from("messages")
-        .select("id, conversation_id, body, created_at, direction")
-        .eq("direction", "inbound")
-        .gt("created_at", lastSeen)
-        .order("created_at", { ascending: true })
-        .limit(20);
+      const params = new URLSearchParams({ after: lastSeen });
+      const data = await fetchData<
+        Array<{
+          id: string;
+          conversation_id: string;
+          body: string | null;
+          created_at: string;
+          direction: string;
+        }>
+      >(`/api/notifications/inbound-messages?${params}`);
       if (!data?.length) return;
-      lastSeen = data[data.length - 1]!.created_at as string;
+      lastSeen = data[data.length - 1]!.created_at;
       for (const msg of data) {
         if (!msg.conversation_id || !msg.id) continue;
         push({
@@ -248,8 +259,8 @@ export function NotificationBell({ userId }: { userId: string }) {
           body: msg.body
             ? sanitizeMessageBody(msg.body).slice(0, 120)
             : "Nuevo mensaje",
-          conversationId: msg.conversation_id as string,
-          createdAt: (msg.created_at as string) || new Date().toISOString(),
+          conversationId: msg.conversation_id,
+          createdAt: msg.created_at || new Date().toISOString(),
         });
       }
     };

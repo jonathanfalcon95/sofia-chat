@@ -1,7 +1,16 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import {
+  deleteContactTagById,
+  deleteContactTagLinks,
+  getContactCompanyId,
+  insertContactTagLinks,
+  insertTag,
+  listCompanyContactTagIds,
+  updateContactTagById,
+} from "@/lib/db/repos/tags";
 import {
   getAppSession,
   sessionHasPermission,
@@ -33,8 +42,8 @@ export async function createContactTag(input: {
   const name = input.name.trim();
   if (!name) throw new Error("Nombre obligatorio");
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("tags").insert({
+  const db = await getUserDb();
+  const { error } = await insertTag(db, {
     company_id: input.companyId,
     name,
     color: input.color || "#64748b",
@@ -58,15 +67,11 @@ export async function updateContactTag(input: {
     throw new Error("Sin permiso para editar tags");
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("tags")
-    .update({
-      name: input.name.trim(),
-      color: input.color,
-    })
-    .eq("id", input.id)
-    .eq("is_kanban_column", false);
+  const db = await getUserDb();
+  const { error } = await updateContactTagById(db, input.id, {
+    name: input.name.trim(),
+    color: input.color,
+  });
   if (error) throw new Error(error.message);
   revalidatePath("/contacts");
   revalidatePath("/conversations");
@@ -79,12 +84,8 @@ export async function deleteContactTag(id: string, companyId: string) {
     throw new Error("Sin permiso para eliminar tags");
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("tags")
-    .delete()
-    .eq("id", id)
-    .eq("is_kanban_column", false);
+  const db = await getUserDb();
+  const { error } = await deleteContactTagById(db, id);
   if (error) throw new Error(error.message);
   revalidatePath("/contacts");
   revalidatePath("/conversations");
@@ -94,12 +95,8 @@ export async function setContactTags(contactId: string, tagIds: string[]) {
   const session = await getAppSession();
   if (!session) throw new Error("No autenticado");
 
-  const supabase = await createClient();
-  const { data: contact } = await supabase
-    .from("contacts")
-    .select("id, company_id")
-    .eq("id", contactId)
-    .single();
+  const db = await getUserDb();
+  const { data: contact } = await getContactCompanyId(db, contactId);
   if (!contact) throw new Error("Contacto no encontrado");
 
   if (!sessionHasPermission(session, contact.company_id, "conversations.tag")) {
@@ -109,25 +106,22 @@ export async function setContactTags(contactId: string, tagIds: string[]) {
   const unique = Array.from(new Set(tagIds.filter(Boolean)));
 
   if (unique.length) {
-    const { data: valid } = await supabase
-      .from("tags")
-      .select("id")
-      .eq("company_id", contact.company_id)
-      .eq("is_kanban_column", false)
-      .in("id", unique);
+    const { data: valid } = await listCompanyContactTagIds(
+      db,
+      contact.company_id,
+      unique,
+    );
     if ((valid?.length ?? 0) !== unique.length) {
       throw new Error("Tag inválido para esta empresa");
     }
   }
 
-  const { error: delError } = await supabase
-    .from("contact_tags")
-    .delete()
-    .eq("contact_id", contactId);
+  const { error: delError } = await deleteContactTagLinks(db, contactId);
   if (delError) throw new Error(delError.message);
 
   if (unique.length) {
-    const { error } = await supabase.from("contact_tags").insert(
+    const { error } = await insertContactTagLinks(
+      db,
       unique.map((tag_id) => ({ contact_id: contactId, tag_id })),
     );
     if (error) throw new Error(error.message);

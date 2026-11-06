@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { listTicketsPage } from "@/lib/db/repos/tickets";
 import { listCompanySupportAgents } from "@/lib/agents";
 import {
   getAppSession,
@@ -6,18 +7,14 @@ import {
   sessionTicketSupportCompanyIds,
 } from "@/lib/rbac/session";
 import { TicketsManager } from "@/components/tickets/tickets-manager";
-import {
-  firstSearchParam,
-  ilikePattern,
-  parsePageParams,
-} from "@/lib/pagination";
+import { firstSearchParam, parsePageParams } from "@/lib/pagination";
 
 export default async function TicketsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const supabase = await createClient();
+  const db = await getUserDb();
   const session = await getAppSession();
   if (!session) return null;
 
@@ -34,47 +31,21 @@ export default async function TicketsPage({
     ? null
     : sessionTicketSupportCompanyIds(session);
 
-  let ticketsQuery = supabase
-    .from("tickets")
-    .select(
-      `
-      id, title, description, status, priority, company_id, conversation_id,
-      assignee_id, created_by, created_at, updated_at,
-      support_response, support_responded_at, support_responded_by,
-      companies ( name ),
-      assignee:profiles!tickets_assignee_id_fkey ( full_name, email ),
-      creator:profiles!tickets_created_by_fkey ( full_name, email ),
-      responder:profiles!tickets_support_responded_by_fkey ( full_name, email ),
-      conversations (
-        id,
-        contacts ( name, phone_number )
-      )
-    `,
-      { count: "exact" },
-    )
-    .order("created_at", { ascending: false });
-
-  if (!isSupportViewer) {
-    ticketsQuery = ticketsQuery.eq("created_by", session.userId);
-  }
-  if (status !== "all") ticketsQuery = ticketsQuery.eq("status", status);
-  if (priority !== "all") ticketsQuery = ticketsQuery.eq("priority", priority);
-  if (isSupportViewer) {
-    if (assignee === "mine") {
-      ticketsQuery = ticketsQuery.eq("assignee_id", session.userId);
-    } else if (assignee === "unassigned") {
-      ticketsQuery = ticketsQuery.is("assignee_id", null);
-    }
-  }
-  if (q) {
-    const pattern = ilikePattern(q);
-    ticketsQuery = ticketsQuery.or(
-      `title.ilike."${pattern}",description.ilike."${pattern}"`,
-    );
-  }
-
   const [{ data: tickets, count }, supportAgents] = await Promise.all([
-    ticketsQuery.range(from, to),
+    listTicketsPage(
+      db,
+      {
+        createdBy: isSupportViewer ? undefined : session.userId,
+        status,
+        priority,
+        assigneeId:
+          isSupportViewer && assignee === "mine" ? session.userId : undefined,
+        unassignedOnly: isSupportViewer && assignee === "unassigned",
+        search: q,
+      },
+      from,
+      to,
+    ),
     listCompanySupportAgents(),
   ]);
 

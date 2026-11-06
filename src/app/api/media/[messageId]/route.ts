@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getSystemDb } from "@/lib/db/client";
+import { findMessageMedia } from "@/lib/db/repos/media";
+import { findConversationInbox } from "@/lib/db/repos/messaging";
+import { downloadStorageObject } from "@/lib/db/repos/storage";
 import { downloadYCloudMedia } from "@/lib/ycloud/client";
 import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@/lib/media";
@@ -39,11 +42,7 @@ export async function GET(
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const { data: message, error } = await supabase
-    .from("messages")
-    .select("id, media_url, media_mime, type, body, media_filename, conversation_id")
-    .eq("id", messageId)
-    .maybeSingle();
+  const { data: message, error } = await findMessageMedia(supabase, messageId);
 
   if (error || !message?.media_url) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
@@ -73,10 +72,12 @@ export async function GET(
   try {
     const storageRef = parseStorageRef(message.media_url);
     if (storageRef) {
-      const admin = createAdminClient();
-      const { data: file, error: dlError } = await admin.storage
-        .from(storageRef.bucket)
-        .download(storageRef.path);
+      const admin = getSystemDb();
+      const { data: file, error: dlError } = await downloadStorageObject(
+        admin,
+        storageRef.bucket,
+        storageRef.path,
+      );
       if (dlError || !file) {
         return NextResponse.json(
           { error: dlError?.message || "storage_missing" },
@@ -98,11 +99,10 @@ export async function GET(
       });
     }
 
-    const { data: conversation, error: convError } = await supabase
-      .from("conversations")
-      .select("inbox_id")
-      .eq("id", message.conversation_id)
-      .maybeSingle();
+    const { data: conversation, error: convError } = await findConversationInbox(
+      supabase,
+      message.conversation_id,
+    );
     if (convError || !conversation?.inbox_id) {
       return NextResponse.json({ error: "inbox_not_found" }, { status: 404 });
     }
