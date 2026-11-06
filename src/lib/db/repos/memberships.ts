@@ -1,3 +1,5 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/memberships";
 import type { Db } from "../types";
 
 /** Active memberships whose role has this exact name, with their profile. */
@@ -6,6 +8,8 @@ export async function listActiveMembersByRoleName(
   roleName: string,
   companyId?: string,
 ) {
+  if (isSqlDb(db)) return sql.listActiveMembersByRoleName(db, roleName, companyId);
+
   let query = db
     .from("company_memberships")
     .select(
