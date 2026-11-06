@@ -1,30 +1,20 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronDown,
   Loader2,
   MapPin,
-  Mic,
-  Paperclip,
   Reply,
-  Send,
   SmilePlus,
-  Square,
-  AlertTriangle,
   ExternalLink,
-  X,
 } from "lucide-react";
-import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { WhatsAppText } from "@/components/conversations/whatsapp-text";
+import { MessageComposer } from "@/components/conversations/message-composer";
 import { MessageStatusIcon } from "@/components/conversations/message-status-icon";
 import { MessageMedia } from "@/components/conversations/message-media";
-import { validateOutboundFile } from "@/lib/media";
-import { createVoiceRecorder } from "@/lib/voice-recorder";
-import { whatsappDeepLink } from "@/lib/conversations/phone-digits";
 import {
   extractUrlFromBody,
   formatRevokedMessage,
@@ -34,20 +24,6 @@ import {
 import { groupMessagesByDay } from "@/lib/conversations/day-grouping";
 import type { MessageRow } from "@/lib/conversations/types";
 import type { SofiaControlAction } from "@/components/conversations/sofia-commands-help";
-
-const EmojiPicker = dynamic(
-  () =>
-    import("@/components/conversations/emoji-picker").then((m) => m.EmojiPicker),
-  { ssr: false, loading: () => <span className="h-9 w-9" /> },
-);
-
-const SofiaCommandsHelp = dynamic(
-  () =>
-    import("@/components/conversations/sofia-commands-help").then(
-      (m) => m.SofiaCommandsHelp,
-    ),
-  { ssr: false, loading: () => <span className="h-9 w-9" /> },
-);
 
 const REACTION_SET = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
 
@@ -61,6 +37,36 @@ function messageWamid(m: MessageRow) {
   return null;
 }
 
+function parseLocationLink(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const match = body.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+  if (match) {
+    return `https://www.google.com/maps/search/?api=1&query=${match[1]},${match[2]}`;
+  }
+  const clean = body.replace(/^[📍\s]+/, "").trim();
+  if (clean && clean !== "Ubicación compartida" && clean !== "Ubicación") {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(clean)}`;
+  }
+  return null;
+}
+
+function quotedPreview(m: MessageRow) {
+  if (m.type === "image")
+    return m.body?.trim() ? `📷 ${sanitizeMessageBody(m.body, m.type)}` : "📷 Imagen";
+  if (m.type === "video")
+    return m.body?.trim() ? `🎬 ${sanitizeMessageBody(m.body, m.type)}` : "🎬 Video";
+  if (m.type === "audio") return "🎤 Nota de voz";
+  if (m.type === "document")
+    return `📄 ${m.media_filename || sanitizeMessageBody(m.body, m.type) || "Documento"}`;
+  if (m.type === "sticker") return "Sticker";
+  if (m.type === "location")
+    return `📍 ${sanitizeMessageBody(m.body, m.type)}`;
+  return sanitizeMessageBody(
+    m.body || m.template_name || m.type || "Mensaje",
+    m.type,
+  ).slice(0, 120);
+}
+
 export function MessageThread({
   activeConversationId,
   messages,
@@ -71,17 +77,12 @@ export function MessageThread({
   canText,
   windowHint,
   contactPhone,
-  text,
-  onTextChange,
-  onSend,
+  onSendText,
   onSofiaAction,
   sofiaPending = null,
   onSendMedia,
   mediaSending,
-  onComposerKeyDown,
   composerRef,
-  onInsertEmoji,
-  onResizeComposer,
   onFirstPaint,
   replyTo,
   onReplyTo,
@@ -98,17 +99,12 @@ export function MessageThread({
   canText: boolean;
   windowHint: string;
   contactPhone?: string | null;
-  text: string;
-  onTextChange: (value: string) => void;
-  onSend: () => void;
+  onSendText: (text: string) => boolean;
   onSofiaAction: (action: SofiaControlAction) => void;
   sofiaPending?: SofiaControlAction | null;
   onSendMedia: (file: File, caption?: string) => Promise<void>;
   mediaSending: boolean;
-  onComposerKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
-  onInsertEmoji: (emoji: string) => void;
-  onResizeComposer: () => void;
   onFirstPaint?: (conversationId: string) => void;
   replyTo: MessageRow | null;
   onReplyTo: (message: MessageRow | null) => void;
@@ -118,24 +114,15 @@ export function MessageThread({
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const stickToBottomRef = useRef(true);
   const prevCountRef = useRef(0);
   const prevFirstIdRef = useRef<string | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const mimeRef = useRef("audio/ogg");
-  const tickRef = useRef<number | null>(null);
   const firstPaintDoneForConversationRef = useRef<string | null>(null);
-  const [recording, setRecording] = useState(false);
-  const [recordSecs, setRecordSecs] = useState(0);
-  const [preparingMic, setPreparingMic] = useState(false);
   const [menuMessageId, setMenuMessageId] = useState<string | null>(null);
   const [reactPickerId, setReactPickerId] = useState<string | null>(null);
   const firstMessageId = messages[0]?.id;
   const lastMessageId = messages[messages.length - 1]?.id;
-  const whatsappUrl = whatsappDeepLink(contactPhone);
+  const actionsOpen = menuMessageId !== null || reactPickerId !== null;
 
   const byWamid = useMemo(() => {
     const map = new Map<string, MessageRow>();
@@ -184,17 +171,17 @@ export function MessageThread({
     return () => cancelAnimationFrame(frame);
   }, [activeConversationId, loadingThread, onFirstPaint]);
 
+  // Touch has no hover or mouse-leave, so close open actions on any outside tap.
   useEffect(() => {
-    return () => {
-      if (tickRef.current) window.clearInterval(tickRef.current);
-      try {
-        recorderRef.current?.stop();
-      } catch {
-        /* ignore */
-      }
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+    if (!actionsOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if ((e.target as Element | null)?.closest("[data-msg-actions]")) return;
+      setMenuMessageId(null);
+      setReactPickerId(null);
     };
-  }, []);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [actionsOpen]);
 
   function handleScroll() {
     const el = parentRef.current;
@@ -206,135 +193,20 @@ export function MessageThread({
     }
   }
 
-  async function onPickFile(file: File | null) {
-    if (!file) return;
-    const check = validateOutboundFile(file);
-    if (!check.ok) {
-      toast.error(check.error);
-      return;
-    }
-    try {
-      await onSendMedia(file, text.trim() || undefined);
-      onTextChange("");
-      requestAnimationFrame(() => onResizeComposer());
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "No se pudo enviar");
-    }
-  }
-
-  function stopRecordingUi() {
-    setRecording(false);
-    setRecordSecs(0);
-    if (tickRef.current) {
-      window.clearInterval(tickRef.current);
-      tickRef.current = null;
-    }
-  }
-
-  async function toggleRecording() {
-    if (recording) {
-      try {
-        recorderRef.current?.stop();
-      } catch {
-        stopRecordingUi();
-      }
-      return;
-    }
-    if (preparingMic || mediaSending) return;
-
-    try {
-      setPreparingMic(true);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const { recorder, mimeType } = await createVoiceRecorder(stream);
-      mimeRef.current = mimeType;
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      recorder.onerror = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        stopRecordingUi();
-        toast.error("Error al grabar audio");
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-        stopRecordingUi();
-        const blobType = mimeType.split(";")[0] || "audio/ogg";
-        const blob = new Blob(chunksRef.current, { type: blobType });
-        if (blob.size < 256) {
-          toast.error("Grabación demasiado corta");
-          return;
-        }
-        const file = new File([blob], `voice-${Date.now()}.ogg`, {
-          type: blobType,
-        });
-        void onPickFile(file);
-      };
-      recorderRef.current = recorder;
-      recorder.start(250);
-      setPreparingMic(false);
-      setRecording(true);
-      setRecordSecs(0);
-      tickRef.current = window.setInterval(
-        () => setRecordSecs((s) => s + 1),
-        1000,
-      );
-    } catch {
-      setPreparingMic(false);
-      toast.error("No se pudo acceder al micrófono");
-    }
-  }
-
-  const recordLabel = `${String(Math.floor(recordSecs / 60)).padStart(2, "0")}:${String(
-    recordSecs % 60,
-  ).padStart(2, "0")}`;
-
   const dayGroups = useMemo(() => groupMessagesByDay(messages), [messages]);
-
-  function parseLocationLink(body: string | null | undefined): string | null {
-    if (!body) return null;
-    const match = body.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
-    if (match) {
-      return `https://www.google.com/maps/search/?api=1&query=${match[1]},${match[2]}`;
-    }
-    const clean = body.replace(/^[📍\s]+/, "").trim();
-    if (clean && clean !== "Ubicación compartida" && clean !== "Ubicación") {
-      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(clean)}`;
-    }
-    return null;
-  }
-
-  function quotedPreview(m: MessageRow) {
-    if (m.type === "image")
-      return m.body?.trim() ? `📷 ${sanitizeMessageBody(m.body, m.type)}` : "📷 Imagen";
-    if (m.type === "video")
-      return m.body?.trim() ? `🎬 ${sanitizeMessageBody(m.body, m.type)}` : "🎬 Video";
-    if (m.type === "audio") return "🎤 Nota de voz";
-    if (m.type === "document")
-      return `📄 ${m.media_filename || sanitizeMessageBody(m.body, m.type) || "Documento"}`;
-    if (m.type === "sticker") return "Sticker";
-    if (m.type === "location")
-      return `📍 ${sanitizeMessageBody(m.body, m.type)}`;
-    return sanitizeMessageBody(
-      m.body || m.template_name || m.type || "Mensaje",
-      m.type,
-    ).slice(0, 120);
-  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
         ref={parentRef}
         onScroll={handleScroll}
-        className="chat-thread-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4"
+        className="chat-thread-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-[4%] py-3"
       >
         {loadingThread ? (
           <div className="space-y-3 py-4">
-            <Skeleton className="h-12 w-2/3 rounded-2xl" />
-            <Skeleton className="ml-auto h-12 w-1/2 rounded-2xl" />
-            <Skeleton className="h-16 w-3/5 rounded-2xl" />
+            <Skeleton className="h-12 w-2/3 rounded-lg" />
+            <Skeleton className="ml-auto h-12 w-1/2 rounded-lg" />
+            <Skeleton className="h-16 w-3/5 rounded-lg" />
           </div>
         ) : (
           <>
@@ -358,17 +230,23 @@ export function MessageThread({
                 </Button>
               </div>
             ) : null}
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3">
               {dayGroups.map((group) => (
-                <div key={group.dayKey} className="relative flex flex-col gap-2.5">
-                  <div className="sticky top-2 z-10 flex justify-center py-1 pointer-events-none">
-                    <span className="pointer-events-auto rounded-lg border border-[var(--line)] bg-[var(--surface-2)]/90 px-3 py-1 text-[11px] font-medium text-[var(--muted)] shadow-xs backdrop-blur-sm select-none">
+                <div key={group.dayKey} className="relative flex flex-col">
+                  <div className="pointer-events-none sticky top-1 z-10 mb-1 flex justify-center py-1">
+                    <span className="pointer-events-auto select-none rounded-lg bg-[var(--surface-2)] px-3 py-1 text-[11px] font-medium text-[var(--muted)] shadow-xs">
                       {group.dayLabel}
                     </span>
                   </div>
-                  {group.messages.map((m) => {
+                  {group.messages.map((m, index) => {
                     const media = isMedia(m.type);
                     const notice = isSpecialNoticeType(m.type, m.body);
+                    const outbound = m.direction === "outbound";
+                    const previous = group.messages[index - 1];
+                    const startsRun =
+                      !previous ||
+                      previous.direction !== m.direction ||
+                      isSpecialNoticeType(previous.type, previous.body);
                     const interactiveUrl =
                       m.type === "interactive" ? extractUrlFromBody(m.body) : null;
                     const quoted = m.reply_to_wamid
@@ -378,12 +256,17 @@ export function MessageThread({
                     const ourReaction = reactions.find((r) => r.direction === "outbound");
                     const showMenu = menuMessageId === m.id;
                     const showReact = reactPickerId === m.id;
+                    const hasWamid = Boolean(messageWamid(m));
+                    const opensUp = m.id === lastMessageId;
+                    const popoverPosition = `${outbound ? "right-0" : "left-0"} ${
+                      opensUp ? "bottom-full mb-1" : "top-full mt-1"
+                    }`;
 
                     if (notice) {
                       return (
                         <div
                           key={m.id}
-                          className="mx-auto max-w-[90%] rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-center text-xs text-[var(--muted)]"
+                          className="mx-auto my-1 max-w-[90%] rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-center text-xs text-[var(--muted)]"
                         >
                           {sanitizeMessageBody(m.body, m.type) || formatRevokedMessage()}
                           <div className="mt-1 text-[10px] opacity-70">
@@ -400,15 +283,15 @@ export function MessageThread({
                       <div
                         key={m.id}
                         className={`group relative flex flex-col ${
-                          m.direction === "outbound" ? "items-end" : "items-start"
-                        }`}
+                          outbound ? "items-end" : "items-start"
+                        } ${startsRun ? "mt-2" : "mt-0.5"}`}
                         onMouseLeave={() => {
                           if (menuMessageId === m.id) setMenuMessageId(null);
                           if (reactPickerId === m.id) setReactPickerId(null);
                         }}
                       >
                         <div
-                          className={`msg-bubble text-[14.5px] leading-[1.4] ${
+                          className={`msg-bubble text-[14.2px] leading-[1.35] ${
                             media
                               ? `msg-bubble-media ${
                                   m.type === "audio"
@@ -419,8 +302,10 @@ export function MessageThread({
                                         ? "msg-bubble-sticker"
                                         : ""
                                 }`
-                              : "px-3 py-2"
-                          } ${m.direction === "outbound" ? "msg-out" : "msg-in"}`}
+                              : "px-2.5 py-1.5"
+                          } ${outbound ? "msg-out" : "msg-in"} ${
+                            startsRun && m.type !== "sticker" ? "msg-tail" : ""
+                          }`}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             setMenuMessageId(m.id);
@@ -430,9 +315,9 @@ export function MessageThread({
                           {m.reply_to_wamid ? (
                             <div
                               className={`mb-1.5 rounded-md border-l-2 px-2 py-1 text-[12px] ${
-                                m.direction === "outbound"
-                                  ? "border-white/50 bg-black/10 text-white/85"
-                                  : "border-[var(--accent)] bg-[var(--surface-2)] text-[var(--muted)]"
+                                outbound
+                                  ? "border-white/50 bg-black/15 text-white/85"
+                                  : "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--muted)]"
                               }`}
                             >
                               {quoted ? quotedPreview(quoted) : "Mensaje citado"}
@@ -467,7 +352,7 @@ export function MessageThread({
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
-                                    m.direction === "outbound"
+                                    outbound
                                       ? "border-white/40 text-white hover:bg-white/10"
                                       : "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
                                   }`}
@@ -480,7 +365,7 @@ export function MessageThread({
                           ) : m.type === "location" ? (
                             <div className="space-y-2">
                               <div className="flex items-start gap-2">
-                                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                                <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
                                 <div className="wa-text break-words whitespace-pre-wrap">
                                   <WhatsAppText text={sanitizeMessageBody(m.body, m.type)} />
                                 </div>
@@ -494,7 +379,7 @@ export function MessageThread({
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
-                                      m.direction === "outbound"
+                                      outbound
                                         ? "border-white/40 text-white hover:bg-white/10"
                                         : "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)]"
                                     }`}
@@ -511,29 +396,109 @@ export function MessageThread({
                             </div>
                           )}
                           <div
-                            className={`mt-1 flex items-center justify-end gap-1 px-1 text-[10px] leading-none ${
-                              m.direction === "outbound"
+                            className={`mt-0.5 flex items-center justify-end gap-1 pl-3 text-[10.5px] leading-none ${
+                              outbound && m.type !== "sticker"
                                 ? "text-white/70"
                                 : "text-[var(--muted)]"
-                            } ${m.type === "sticker" ? "px-0 text-[var(--muted)]" : ""}`}
+                            }`}
                           >
-                            <span>
+                            {m.template_name ? (
+                              <span className="min-w-0 truncate">{m.template_name} ·</span>
+                            ) : null}
+                            <span className="shrink-0">
                               {new Date(m.created_at).toLocaleTimeString("es", {
                                 hour: "2-digit",
                                 minute: "2-digit",
                               })}
                             </span>
-                            {m.template_name ? (
-                              <span>· {m.template_name}</span>
-                            ) : null}
-                            {m.direction === "outbound" ? (
+                            {outbound ? (
                               <MessageStatusIcon status={m.status} />
+                            ) : null}
+                          </div>
+
+                          <div data-msg-actions>
+                            <button
+                              type="button"
+                              aria-label="Acciones del mensaje"
+                              aria-expanded={showMenu}
+                              className={`msg-actions-trigger ${
+                                outbound ? "msg-actions-trigger--out" : "msg-actions-trigger--in"
+                              } ${showMenu || showReact ? "msg-actions-trigger--open" : ""}`}
+                              onClick={() => {
+                                setReactPickerId(null);
+                                setMenuMessageId((id) => (id === m.id ? null : m.id));
+                              }}
+                            >
+                              <ChevronDown className="h-4 w-4" />
+                            </button>
+
+                            {showMenu ? (
+                              <div
+                                className={`absolute z-20 flex w-36 flex-col overflow-hidden rounded-lg bg-[var(--surface-3)] py-1 text-[13px] text-[var(--ink)] shadow-lg ${popoverPosition}`}
+                              >
+                                <button
+                                  type="button"
+                                  disabled={!canText || !hasWamid}
+                                  title={
+                                    hasWamid
+                                      ? "Responder"
+                                      : "Espera a que WhatsApp asigne wamid"
+                                  }
+                                  className="flex min-h-10 items-center gap-2 px-3 text-left hover:bg-[var(--accent-soft)] disabled:opacity-40"
+                                  onClick={() => {
+                                    if (!hasWamid) return;
+                                    onReplyTo(m);
+                                    setMenuMessageId(null);
+                                    composerRef.current?.focus();
+                                  }}
+                                >
+                                  <Reply className="h-3.5 w-3.5" />
+                                  Responder
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!canText || !hasWamid}
+                                  title={
+                                    hasWamid
+                                      ? "Reaccionar"
+                                      : "Espera a que WhatsApp asigne wamid"
+                                  }
+                                  className="flex min-h-10 items-center gap-2 px-3 text-left hover:bg-[var(--accent-soft)] disabled:opacity-40"
+                                  onClick={() => {
+                                    setReactPickerId(m.id);
+                                    setMenuMessageId(null);
+                                  }}
+                                >
+                                  <SmilePlus className="h-3.5 w-3.5" />
+                                  Reaccionar
+                                </button>
+                              </div>
+                            ) : null}
+
+                            {showReact ? (
+                              <div
+                                className={`absolute z-20 flex gap-0.5 rounded-full bg-[var(--surface-3)] p-1 shadow-lg ${popoverPosition}`}
+                              >
+                                {REACTION_SET.map((emoji) => (
+                                  <button
+                                    key={emoji}
+                                    type="button"
+                                    className="h-9 w-9 rounded-full text-base hover:bg-[var(--accent-soft)]"
+                                    onClick={() => {
+                                      onReact(m, emoji);
+                                      setReactPickerId(null);
+                                    }}
+                                  >
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
                             ) : null}
                           </div>
                         </div>
 
                         {reactions.length > 0 ? (
-                          <div className="mt-1 flex flex-wrap gap-1 px-1">
+                          <div className="relative z-[1] -mt-1 flex flex-wrap gap-1 px-2">
                             {Object.entries(
                               reactions.reduce<Record<string, number>>((acc, r) => {
                                 acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
@@ -553,73 +518,12 @@ export function MessageThread({
                                 }}
                                 className={`rounded-full border px-1.5 py-0.5 text-xs ${
                                   ourReaction?.emoji === emoji
-                                    ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                                    : "border-[var(--line)] bg-[var(--surface)]"
+                                    ? "border-[var(--accent)] bg-[var(--surface-3)]"
+                                    : "border-[var(--line)] bg-[var(--surface-2)]"
                                 }`}
                               >
                                 {emoji}
                                 {count > 1 ? ` ${count}` : ""}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-
-                        <div
-                          className={`mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 ${
-                            showMenu || showReact ? "opacity-100" : ""
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            disabled={!canText || !messageWamid(m)}
-                            title={
-                              messageWamid(m)
-                                ? "Responder"
-                                : "Espera a que WhatsApp asigne wamid"
-                            }
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
-                            onClick={() => {
-                              if (!messageWamid(m)) return;
-                              onReplyTo(m);
-                              setMenuMessageId(null);
-                              composerRef.current?.focus();
-                            }}
-                          >
-                            <Reply className="h-3 w-3" />
-                            Responder
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!canText || !messageWamid(m)}
-                            title={
-                              messageWamid(m)
-                                ? "Reaccionar"
-                                : "Espera a que WhatsApp asigne wamid"
-                            }
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 text-[11px] text-[var(--muted)] hover:text-[var(--ink)] disabled:opacity-40"
-                            onClick={() => {
-                              setReactPickerId((id) => (id === m.id ? null : m.id));
-                              setMenuMessageId(null);
-                            }}
-                          >
-                            <SmilePlus className="h-3 w-3" />
-                            Reaccionar
-                          </button>
-                        </div>
-
-                        {showReact ? (
-                          <div className="mt-1 flex gap-1 rounded-full border border-[var(--line)] bg-[var(--surface)] p-1 shadow-sm">
-                            {REACTION_SET.map((emoji) => (
-                              <button
-                                key={emoji}
-                                type="button"
-                                className="h-8 w-8 rounded-full text-base hover:bg-[var(--accent-soft)]"
-                                onClick={() => {
-                                  onReact(m, emoji);
-                                  setReactPickerId(null);
-                                }}
-                              >
-                                {emoji}
                               </button>
                             ))}
                           </div>
@@ -635,195 +539,23 @@ export function MessageThread({
         )}
       </div>
 
-      <footer className="chat-composer-footer shrink-0 border-t border-[var(--line)] bg-[var(--surface)] px-3 py-3 sm:px-4">
-        {sofiaStoppedAll ? (
-          <div className="mb-2 flex gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-            <div>
-              <p className="font-semibold">Sofia está pausada en toda la línea</p>
-              <p className="mt-0.5 opacity-90">
-                No responderá en ningún chat de este número. Usa{" "}
-                <span className="font-semibold">Reanudar todos</span> en los
-                controles de Sofia.
-              </p>
-            </div>
-          </div>
-        ) : sofiaChatPaused ? (
-          <div className="mb-2 flex gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-            <div>
-              <p className="font-semibold">Sofia está pausada en este chat</p>
-              <p className="mt-0.5 opacity-90">
-                Usa <span className="font-semibold">Reanudar chat</span> en los
-                controles de Sofia para activarla aquí.
-              </p>
-            </div>
-          </div>
-        ) : null}
-        {!canText ? (
-          <div className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-900 dark:text-amber-100">
-            <p className="font-semibold">Ventana de 24h cerrada</p>
-            <p className="mt-1 opacity-90">
-              WhatsApp Business no permite enviar mensajes libres desde Sofia
-              Chat hasta que el contacto escriba de nuevo. Puedes iniciar la
-              conversación tú mismo abriendo el chat en WhatsApp.
-            </p>
-            {whatsappUrl ? (
-              <a
-                href={whatsappUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-[#25D366] px-3 py-1.5 text-xs font-semibold text-white hover:brightness-95"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Abrir en WhatsApp
-              </a>
-            ) : (
-              <p className="mt-2 opacity-80">{windowHint}</p>
-            )}
-          </div>
-        ) : null}
-        {replyTo ? (
-          <div className="mb-2 flex items-start gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2">
-            <div className="min-w-0 flex-1 border-l-2 border-[var(--accent)] pl-2">
-              <p className="text-[11px] font-semibold text-[var(--accent)]">
-                Respondiendo
-              </p>
-              <p className="truncate text-xs text-[var(--muted)]">
-                {quotedPreview(replyTo)}
-              </p>
-            </div>
-            <button
-              type="button"
-              aria-label="Cancelar respuesta"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--surface)]"
-              onClick={() => onReplyTo(null)}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ) : null}
-        {recording ? (
-          <div className="mb-2 flex items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5">
-            <span className="relative flex h-3 w-3">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
-              <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-red-600 dark:text-red-300">
-                Grabando nota de voz…
-              </p>
-              <p className="font-mono text-xs text-[var(--muted)]">
-                {recordLabel} · toca el cuadrado para enviar
-              </p>
-            </div>
-            <Button
-              type="button"
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-full bg-red-500 text-white hover:bg-red-600"
-              aria-label="Detener y enviar nota de voz"
-              onClick={() => void toggleRecording()}
-            >
-              <Square className="h-4 w-4 fill-current" />
-            </Button>
-          </div>
-        ) : null}
-        <div className={`chat-composer ${!canText || recording ? "opacity-60" : ""}`}>
-          <EmojiPicker
-            disabled={!canText || mediaSending || recording}
-            onPick={onInsertEmoji}
-          />
-          <SofiaCommandsHelp
-            pending={sofiaPending}
-            onAction={onSofiaAction}
-            sofiaStoppedAll={sofiaStoppedAll}
-            chatPaused={sofiaChatPaused}
-          />
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,application/pdf"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              e.target.value = "";
-              void onPickFile(f);
-            }}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={!canText || mediaSending || recording || preparingMic}
-            className="h-9 w-9 shrink-0 rounded-full border-0 text-[var(--muted)]"
-            aria-label="Adjuntar archivo"
-            title="Imagen o PDF"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Paperclip className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={!canText || mediaSending || preparingMic}
-            className={`h-9 w-9 shrink-0 rounded-full border-0 ${
-              recording ? "bg-red-500/15 text-red-500" : "text-[var(--muted)]"
-            }`}
-            aria-label={recording ? "Detener grabación" : "Nota de voz"}
-            title={recording ? "Detener y enviar" : "Nota de voz (OGG)"}
-            onClick={() => void toggleRecording()}
-          >
-            {preparingMic ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : recording ? (
-              <Square className="h-4 w-4" />
-            ) : (
-              <Mic className="h-4 w-4" />
-            )}
-          </Button>
-          <Textarea
-            ref={composerRef}
-            className="chat-composer-input"
-            rows={1}
-            placeholder={
-              recording
-                ? "Grabando nota de voz…"
-                : canText
-                  ? "Escribe un mensaje"
-                  : "Chat bloqueado hasta que el contacto escriba"
-            }
-            value={text}
-            onChange={(e) => {
-              onTextChange(e.target.value);
-              requestAnimationFrame(() => onResizeComposer());
-            }}
-            onKeyDown={onComposerKeyDown}
-            disabled={!canText || mediaSending || recording}
-          />
-          <Button
-            type="button"
-            size="icon"
-            className="chat-composer-send"
-            onClick={onSend}
-            disabled={!canText || !text.trim() || mediaSending || recording}
-            aria-label="Enviar mensaje"
-            title="Enviar (Enter)"
-          >
-            {mediaSending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
-        {canText && !recording ? (
-          <p className="mt-1.5 text-[10px] text-[var(--muted)]">
-            Enter envía · Shift+Enter salto · controles Sofia · micrófono nota
-            de voz · clip imagen/PDF
-          </p>
-        ) : null}
-      </footer>
+      <MessageComposer
+        key={activeConversationId}
+        conversationId={activeConversationId}
+        canText={canText}
+        windowHint={windowHint}
+        contactPhone={contactPhone}
+        onSendText={onSendText}
+        onSendMedia={onSendMedia}
+        mediaSending={mediaSending}
+        onSofiaAction={onSofiaAction}
+        sofiaPending={sofiaPending}
+        sofiaStoppedAll={sofiaStoppedAll}
+        sofiaChatPaused={sofiaChatPaused}
+        composerRef={composerRef}
+        replyPreview={replyTo ? quotedPreview(replyTo) : null}
+        onCancelReply={() => onReplyTo(null)}
+      />
     </div>
   );
 }

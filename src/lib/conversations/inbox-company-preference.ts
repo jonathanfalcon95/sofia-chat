@@ -11,6 +11,18 @@ export function pickPreferredCompanyId(
   return companies.some((c) => c.id === preferred) ? preferred : null;
 }
 
+/**
+ * Company the inbox list is scoped to on first load. Always resolves to a
+ * company when the user has one: without company_id the list query scans every
+ * tenant under RLS and hits the 8s statement_timeout.
+ */
+export function resolveInitialCompanyId(
+  companies: Array<{ id: string }>,
+  preferred: string | null | undefined,
+): string {
+  return pickPreferredCompanyId(companies, preferred) ?? companies[0]?.id ?? "";
+}
+
 export function inboxCompanyCookieOptions() {
   return {
     path: "/",

@@ -247,6 +247,22 @@ export async function listWhatsAppTemplates(params: {
   );
 }
 
+export async function getWhatsAppTemplate(params: {
+  apiKey: string;
+  wabaId: string;
+  name: string;
+  language: string;
+}) {
+  const path = [params.wabaId, params.name, params.language]
+    .map(encodeURIComponent)
+    .join("/");
+  return ycloudFetch<{ components?: unknown[]; status?: string }>(
+    `/whatsapp/templates/${path}`,
+    { signal: AbortSignal.timeout(8000) },
+    params.apiKey,
+  );
+}
+
 export type YCloudPhoneNumber = {
   id: string;
   phoneNumber?: string;

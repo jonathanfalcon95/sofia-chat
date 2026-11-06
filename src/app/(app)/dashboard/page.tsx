@@ -1,9 +1,32 @@
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
   getAppSession,
+  sessionCompanyIds,
   sessionShowsAssignedCompanies,
 } from "@/lib/rbac/session";
+import {
+  inboxVisibility,
+  visibleInboxesFilter,
+  type InboxVisibility,
+} from "@/lib/rbac/visible-inboxes";
 import { PageHeader } from "@/components/page-header";
+
+type VisibleInbox = {
+  id: string;
+  name: string;
+  company_id: string | null;
+  is_active: boolean;
+};
+
+/** Shown instead of a number when a count fails: a 0 would read as real data. */
+const UNAVAILABLE = "—";
+
+const NO_VISIBILITY: InboxVisibility = {
+  managedCompanyIds: [],
+  assignedInboxIds: [],
+  conversationCompanyIds: [],
+};
 
 export default async function DashboardPage() {
   const session = await getAppSession();
@@ -16,30 +39,72 @@ export default async function DashboardPage() {
   startOfDay.setHours(0, 0, 0, 0);
   const nowIso = new Date().toISOString();
 
+  // Counting thousands of rows under RLS timed out, and each timeout read as 0.
+  // These queries return only totals and apply the same visibility rules here.
+  const admin = createAdminClient();
+  const visibility = session ? inboxVisibility(session) : NO_VISIBILITY;
+  const inboxFilter = visibility ? visibleInboxesFilter(visibility) : null;
+
+  const { data: visibleInboxes } =
+    visibility && !inboxFilter
+      ? { data: [] as VisibleInbox[] }
+      : await (inboxFilter
+          ? admin
+              .from("inboxes")
+              .select("id, name, company_id, is_active")
+              .or(inboxFilter)
+          : admin.from("inboxes").select("id, name, company_id, is_active"));
+  const inboxRows = (visibleInboxes ?? []) as VisibleInbox[];
+  const conversationInboxIds = inboxRows
+    .filter(
+      (i) =>
+        !visibility ||
+        visibility.conversationCompanyIds.includes(i.company_id ?? ""),
+    )
+    .map((i) => i.id);
+  const contactCompanyIds = session ? sessionCompanyIds(session) : [];
+
+  // Filtered by inbox for everyone but platform admins (visibility === null).
+  const scopedToInboxes = <Q,>(query: Q): Q =>
+    visibility
+      ? (query as { in(column: string, values: string[]): Q }).in(
+          "inbox_id",
+          conversationInboxIds,
+        )
+      : query;
+  const countMessages = (direction: string) => {
+    const query = admin
+      .from("messages")
+      .select(visibility ? "id, conversations!inner(inbox_id)" : "id", {
+        count: "exact",
+        head: true,
+      })
+      .eq("direction", direction)
+      .gte("created_at", startOfDay.toISOString());
+    return visibility
+      ? query.in("conversations.inbox_id", conversationInboxIds)
+      : query;
+  };
+  const countConversations = () =>
+    admin.from("conversations").select("id", { count: "exact", head: true });
+
   const [
     { count: companies },
     { count: openConversations },
     { count: unassigned },
     { count: openTickets },
     { count: inProgressTickets },
-    { count: inboxes },
     { count: contacts },
     { count: inboundToday },
     { count: outboundToday },
     { count: windowOpen },
     { count: windowClosed },
-    { data: inboxRows },
   ] = await Promise.all([
     supabase.from("companies").select("*", { count: "exact", head: true }),
-    supabase
-      .from("conversations")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "open"),
-    supabase
-      .from("conversations")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "open")
-      .is("assignee_id", null),
+    scopedToInboxes(countConversations().eq("status", "open")),
+    scopedToInboxes(
+      countConversations().eq("status", "open").is("assignee_id", null),
+    ),
     supabase
       .from("tickets")
       .select("*", { count: "exact", head: true })
@@ -48,53 +113,45 @@ export default async function DashboardPage() {
       .from("tickets")
       .select("*", { count: "exact", head: true })
       .eq("status", "in_progress"),
-    supabase.from("inboxes").select("*", { count: "exact", head: true }),
-    supabase.from("contacts").select("*", { count: "exact", head: true }),
-    supabase
-      .from("messages")
-      .select("*", { count: "exact", head: true })
-      .eq("direction", "inbound")
-      .gte("created_at", startOfDay.toISOString()),
-    supabase
-      .from("messages")
-      .select("*", { count: "exact", head: true })
-      .eq("direction", "outbound")
-      .gte("created_at", startOfDay.toISOString()),
-    supabase
-      .from("conversations")
-      .select("*", { count: "exact", head: true })
-      .gt("window_expires_at", nowIso),
-    supabase
-      .from("conversations")
-      .select("*", { count: "exact", head: true })
-      .or(`window_expires_at.is.null,window_expires_at.lte.${nowIso}`),
-    supabase.from("inboxes").select("id, name").eq("is_active", true),
+    contactCompanyIds
+      ? admin
+          .from("contacts")
+          .select("id", { count: "exact", head: true })
+          .in("company_id", contactCompanyIds)
+      : admin.from("contacts").select("id", { count: "exact", head: true }),
+    countMessages("inbound"),
+    countMessages("outbound"),
+    scopedToInboxes(countConversations().gt("window_expires_at", nowIso)),
+    scopedToInboxes(
+      countConversations().or(
+        `window_expires_at.is.null,window_expires_at.lte.${nowIso}`,
+      ),
+    ),
   ]);
 
+  const activeInboxes = inboxRows.filter((i) => i.is_active);
   const inboxCounts = await Promise.all(
-    (inboxRows ?? []).map(async (inbox) => {
-      const { count } = await supabase
-        .from("conversations")
-        .select("*", { count: "exact", head: true })
+    activeInboxes.map(async (inbox) => {
+      const { count } = await countConversations()
         .eq("inbox_id", inbox.id)
         .eq("status", "open");
-      return { name: inbox.name as string, value: count ?? 0 };
+      return { name: inbox.name, value: count ?? UNAVAILABLE };
     }),
   );
 
   const cards = [
-    { label: "Chats abiertos", value: openConversations ?? 0 },
-    { label: "Sin asignar", value: unassigned ?? 0 },
-    { label: "Ventana 24h abierta", value: windowOpen ?? 0 },
-    { label: "Fuera de ventana", value: windowClosed ?? 0 },
-    { label: "Msgs inbound hoy", value: inboundToday ?? 0 },
-    { label: "Msgs outbound hoy", value: outboundToday ?? 0 },
-    { label: "Tickets abiertos", value: openTickets ?? 0 },
-    { label: "Tickets en progreso", value: inProgressTickets ?? 0 },
-    { label: "Contactos", value: contacts ?? 0 },
-    { label: "Inboxes", value: inboxes ?? 0 },
+    { label: "Chats abiertos", value: openConversations ?? UNAVAILABLE },
+    { label: "Sin asignar", value: unassigned ?? UNAVAILABLE },
+    { label: "Ventana 24h abierta", value: windowOpen ?? UNAVAILABLE },
+    { label: "Fuera de ventana", value: windowClosed ?? UNAVAILABLE },
+    { label: "Msgs inbound hoy", value: inboundToday ?? UNAVAILABLE },
+    { label: "Msgs outbound hoy", value: outboundToday ?? UNAVAILABLE },
+    { label: "Tickets abiertos", value: openTickets ?? UNAVAILABLE },
+    { label: "Tickets en progreso", value: inProgressTickets ?? UNAVAILABLE },
+    { label: "Contactos", value: contacts ?? UNAVAILABLE },
+    { label: "Inboxes", value: inboxRows.length },
     ...(session?.isPlatformAdmin || !showCompanies
-      ? [{ label: "Empresas", value: companies ?? 0 }]
+      ? [{ label: "Empresas", value: companies ?? UNAVAILABLE }]
       : []),
   ];
 

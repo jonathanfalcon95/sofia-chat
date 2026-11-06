@@ -1,11 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  formatChatListTime,
   formatDayChip,
   getCalendarDayKey,
   groupMessagesByDay,
 } from "./day-grouping.ts";
 import type { MessageRow } from "./types.ts";
+
+test("formatChatListTime follows the WhatsApp list format", () => {
+  const now = new Date(2026, 10, 5, 15, 0); // jueves 5 nov 2026
+  assert.match(formatChatListTime(new Date(2026, 10, 5, 9, 30), now), /09:30/);
+  assert.equal(formatChatListTime(new Date(2026, 10, 4, 23, 59), now), "Ayer");
+  assert.equal(formatChatListTime(new Date(2026, 10, 2, 8, 0), now), "lunes");
+  assert.equal(formatChatListTime(new Date(2026, 9, 20, 8, 0), now), "20/10/26");
+});
 
 test("getCalendarDayKey returns YYYY-MM-DD", () => {
   const d = new Date(2026, 8, 25, 14, 30); // 25 Sep 2026

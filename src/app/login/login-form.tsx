@@ -42,17 +42,8 @@ export function LoginForm({ next }: { next?: string }) {
 
     // Full navigation (not router.replace) so the first SSR request includes
     // the fresh session — soft navigation caused intermittent server errors.
-    const { data: firstChat } = await supabase
-      .from("conversations")
-      .select("id")
-      .order("last_message_at", { ascending: false, nullsFirst: false })
-      .limit(1)
-      .maybeSingle();
-
-    const destination = firstChat?.id
-      ? `/conversations/${firstChat.id}`
-      : "/conversations";
-    window.location.assign(destination);
+    // The inbox deep-links the first chat itself on desktop.
+    window.location.assign("/conversations");
   }
 
   return (

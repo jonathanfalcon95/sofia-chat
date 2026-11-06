@@ -7,7 +7,18 @@ export default async function ConversationDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const detail = await loadConversationDetailData(id, { includeNotes: false });
+
+  // This page renders above the inbox layout, so a failure is reported to
+  // InboxView to show inside the thread pane instead of an error boundary here.
+  let detail;
+  try {
+    detail = await loadConversationDetailData(id, { includeNotes: false });
+  } catch (err) {
+    console.error("[inbox] conversation detail failed", err);
+    return (
+      <InboxThreadBootstrap conversationId={id} initialMessages={[]} loadFailed />
+    );
+  }
 
   return (
     <InboxThreadBootstrap
