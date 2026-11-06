@@ -337,7 +337,11 @@ export async function updateMessagesMediaByYCloudIds(
   patch: Record<string, unknown>,
 ) {
   return done(() =>
-    updateMessages(db, patch, [sql`m.ycloud_message_id IN ${ycloudIdList(ycloudMessageIds)}`]),
+    updateMessages(db, patch, [
+      sql`m.ycloud_message_id IN ${ycloudIdList(ycloudMessageIds)}`,
+      // Status events repeat YCloud's link, which expires; a stored file must keep its reference.
+      sql`(m.media_url IS NULL OR m.media_url NOT LIKE 'storage:%')`,
+    ]),
   );
 }
 
