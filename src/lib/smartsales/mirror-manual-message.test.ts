@@ -145,6 +145,9 @@ test("missing token, upstream errors, network, and timeout do not throw", async 
   );
   assert.deepEqual(network, { ok: false, reason: "request_failed" });
 
+  // AbortSignal.timeout doesn't keep the process alive; on Node 22 the runner
+  // would otherwise see an empty event loop and cancel this test.
+  const keepAlive = setInterval(() => {}, 1_000);
   const timedOut = await mirrorManualMessage(
     { phoneNumber: PHONE, content: "Hola" },
     deps(
@@ -167,6 +170,7 @@ test("missing token, upstream errors, network, and timeout do not throw", async 
       30,
     ),
   );
+  clearInterval(keepAlive);
   assert.deepEqual(timedOut, { ok: false, reason: "request_failed" });
 });
 
