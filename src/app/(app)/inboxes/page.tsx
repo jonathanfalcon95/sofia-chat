@@ -1,4 +1,6 @@
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { listCompanyNames } from "@/lib/db/repos/companies";
+import { listInboxesPage } from "@/lib/db/repos/inboxes";
 import { requireAnyPermission } from "@/lib/rbac/require-permission";
 import { InboxesManager } from "@/components/inboxes/inboxes-manager";
 import {
@@ -21,35 +23,19 @@ export default async function InboxesPage({
   const status = firstSearchParam(sp.status) ?? "all";
   const ycloudAccountId = firstSearchParam(sp.ycloudAccountId) ?? "";
 
-  const supabase = await createClient();
-  const { data: companies } = await supabase
-    .from("companies")
-    .select("id, name")
-    .order("name");
+  const db = await getUserDb();
+  const { data: companies } = await listCompanyNames(db);
 
   const accounts = session?.isPlatformAdmin ? await listYCloudAccounts() : [];
 
-  let query = supabase
-    .from("inboxes")
-    .select(
-      "id, name, phone_number, is_active, company_id, ycloud_phone_number_id, waba_id, ycloud_account_id, companies(name)",
-      { count: "exact" },
-    )
-    .order("created_at", { ascending: false });
-
-  if (status === "active") query = query.eq("is_active", true);
-  if (status === "inactive") query = query.eq("is_active", false);
-  if (companyId === "none") query = query.is("company_id", null);
-  else if (companyId) query = query.eq("company_id", companyId);
-  if (ycloudAccountId) query = query.eq("ycloud_account_id", ycloudAccountId);
-  if (q) {
-    const pattern = ilikePattern(q);
-    query = query.or(
-      `name.ilike."${pattern}",phone_number.ilike."${pattern}"`,
-    );
-  }
-
-  const { data: inboxes, count } = await query.range(from, to);
+  const { data: inboxes, count } = await listInboxesPage(db, {
+    status,
+    companyId,
+    ycloudAccountId,
+    searchPattern: q ? ilikePattern(q) : undefined,
+    from,
+    to,
+  });
   const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
 
   const normalized =

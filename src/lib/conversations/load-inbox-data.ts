@@ -1,8 +1,16 @@
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import {
+  listCompaniesByName,
+  listContactTagOptions,
+  listKanbanTagOptions,
+} from "@/lib/db/repos/conversations";
+import { listConversationMessagesPage } from "@/lib/db/repos/messages";
+import { listConversationNotes } from "@/lib/db/repos/notes";
+import type { Db } from "@/lib/db/types";
 import { listCompanyAgents } from "@/lib/agents";
 import { getAppSession } from "@/lib/rbac/session";
-import { MESSAGE_PAGE_SIZE, MESSAGE_SELECT } from "./types";
+import { MESSAGE_PAGE_SIZE } from "./types";
 import { normalizeNotes } from "./normalize";
 import type { ConversationRow, MessageRow } from "./types";
 import { nowMs, reportServerDuration } from "./perf";
@@ -17,12 +25,9 @@ import {
 
 export type InboxCompany = { id: string; name: string };
 
-async function loadInitialListPage(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  companyId: string,
-) {
+async function loadInitialListPage(db: Db, companyId: string) {
   try {
-    const page = await fetchConversationListPage(supabase, { companyId });
+    const page = await fetchConversationListPage(db, { companyId });
     return { ...page, failed: false };
   } catch (err) {
     console.error("[inbox] conversation list bootstrap failed", err);
@@ -32,15 +37,11 @@ async function loadInitialListPage(
 
 export async function loadInboxListData() {
   const startedAt = nowMs();
-  const supabase = await createClient();
+  const db = await getUserDb();
   const conversationQueryStartedAt = nowMs();
 
   const [session, { data: companies, error: companiesError }, cookieStore] =
-    await Promise.all([
-      getAppSession(),
-      supabase.from("companies").select("id, name").order("name"),
-      cookies(),
-    ]);
+    await Promise.all([getAppSession(), listCompaniesByName(db), cookies()]);
 
   if (companiesError) {
     console.error("[inbox] companies query failed", companiesError);
@@ -57,23 +58,15 @@ export async function loadInboxListData() {
   const [listPage, agents, { data: tags }, { data: contactTags }] =
     await Promise.all([
       initialCompanyId
-        ? loadInitialListPage(supabase, initialCompanyId)
+        ? loadInitialListPage(db, initialCompanyId)
         : Promise.resolve({
             conversations: [] as ConversationRow[],
             hasMore: false,
             failed: false,
           }),
       listCompanyAgents(),
-      supabase
-        .from("tags")
-        .select("id, name, color, company_id")
-        .eq("is_kanban_column", true)
-        .order("position"),
-      supabase
-        .from("tags")
-        .select("id, name, color, company_id")
-        .eq("is_kanban_column", false)
-        .order("name"),
+      listKanbanTagOptions(db),
+      listContactTagOptions(db),
     ]);
 
   reportServerDuration("list_query", conversationQueryStartedAt, {
@@ -105,24 +98,14 @@ export async function loadConversationDetailData(
   options?: { includeNotes?: boolean },
 ) {
   const startedAt = nowMs();
-  const supabase = await createClient();
+  const db = await getUserDb();
   const includeNotes = options?.includeNotes ?? false;
 
   const messagesStartedAt = nowMs();
-  const messagesQuery = supabase
-    .from("messages")
-    .select(MESSAGE_SELECT)
-    .eq("conversation_id", conversationId)
-    .neq("type", "reaction")
-    .order("created_at", { ascending: false })
-    .limit(MESSAGE_PAGE_SIZE);
+  const messagesQuery = listConversationMessagesPage(db, conversationId);
 
   const notesQuery = includeNotes
-    ? supabase
-        .from("conversation_notes")
-        .select("id, body, created_at, profiles(full_name, email)")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: false })
+    ? listConversationNotes(db, conversationId)
     : Promise.resolve({ data: [] as Array<Record<string, unknown>> });
 
   const [
@@ -132,7 +115,7 @@ export async function loadConversationDetailData(
   ] = await Promise.all([
     messagesQuery,
     notesQuery,
-    fetchConversationById(supabase, conversationId),
+    fetchConversationById(db, conversationId),
   ]);
   if (messagesError) {
     throw new Error(`Conversation messages: ${messagesError.message}`);

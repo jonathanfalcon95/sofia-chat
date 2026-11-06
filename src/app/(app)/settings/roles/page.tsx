@@ -1,4 +1,6 @@
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { listCompanyNames } from "@/lib/db/repos/companies";
+import { listCompanyRolesPage, listPermissions } from "@/lib/db/repos/roles";
 import { requireAnyPermission } from "@/lib/rbac/require-permission";
 import { RolesManager } from "@/components/roles/roles-manager";
 import {
@@ -18,25 +20,18 @@ export default async function RolesPage({
   const q = (firstSearchParam(sp.q) ?? "").trim();
   const companyId = firstSearchParam(sp.companyId) ?? "";
 
-  const supabase = await createClient();
+  const db = await getUserDb();
   const [{ data: companies }, { data: permissions }] = await Promise.all([
-    supabase.from("companies").select("id, name").order("name"),
-    supabase.from("permissions").select("code, description").order("code"),
+    listCompanyNames(db),
+    listPermissions(db),
   ]);
 
-  let query = supabase
-    .from("roles")
-    .select(
-      "id, name, description, is_system, company_id, companies(name), role_permissions(permissions(code))",
-      { count: "exact" },
-    )
-    .not("company_id", "is", null)
-    .order("name");
-
-  if (companyId) query = query.eq("company_id", companyId);
-  if (q) query = query.ilike("name", ilikePattern(q));
-
-  const { data: roles, count } = await query.range(from, to);
+  const { data: roles, count } = await listCompanyRolesPage(db, {
+    companyId,
+    namePattern: q ? ilikePattern(q) : undefined,
+    from,
+    to,
+  });
 
   const normalized =
     roles?.map((role) => {

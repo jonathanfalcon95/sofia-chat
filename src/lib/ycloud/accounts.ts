@@ -1,4 +1,16 @@
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getSystemDb } from "@/lib/db/client";
+import {
+  assignYCloudAccountToUnlinkedInboxes,
+  findInboxForCredentials,
+  findYCloudAccount,
+  insertSyncedInbox,
+  insertYCloudAccount,
+  listInboxesForPhoneSync,
+  listYCloudAccounts,
+  saveYCloudAccountWebhook,
+  updateSyncedInbox,
+  updateYCloudAccount,
+} from "@/lib/db/repos/ycloud";
 import { decryptSecret, encryptSecret, secretLast4 } from "@/lib/crypto/secret";
 import {
   YCLOUD_WHATSAPP_WEBHOOK_EVENTS,
@@ -67,13 +79,8 @@ function toPublic(row: YCloudAccountRow): YCloudAccountPublic {
 }
 
 export async function listYCloudAccountRows() {
-  const db = createAdminClient();
-  const { data, error } = await db
-    .from("ycloud_accounts")
-    .select(
-      "id, name, api_key_encrypted, webhook_secret_encrypted, ycloud_webhook_endpoint_id, api_key_last4, is_active",
-    )
-    .order("created_at", { ascending: true });
+  const db = getSystemDb();
+  const { data, error } = await listYCloudAccounts(db);
   if (error) throw new Error(error.message);
   return (data ?? []) as YCloudAccountRow[];
 }
@@ -119,14 +126,8 @@ export function decryptAccountWebhookSecret(row: YCloudAccountRow): string | nul
 }
 
 export async function getYCloudAccountCredentials(accountId: string) {
-  const db = createAdminClient();
-  const { data, error } = await db
-    .from("ycloud_accounts")
-    .select(
-      "id, name, api_key_encrypted, webhook_secret_encrypted, ycloud_webhook_endpoint_id, api_key_last4, is_active",
-    )
-    .eq("id", accountId)
-    .maybeSingle();
+  const db = getSystemDb();
+  const { data, error } = await findYCloudAccount(db, accountId);
   if (error) throw new Error(error.message);
   if (!data) throw new Error("Cuenta YCloud no encontrada");
   const row = data as YCloudAccountRow;
@@ -141,12 +142,8 @@ export async function getYCloudAccountCredentials(accountId: string) {
 export async function getInboxYCloudCredentials(
   inboxId: string,
 ): Promise<InboxYCloudCredentials> {
-  const db = createAdminClient();
-  const { data, error } = await db
-    .from("inboxes")
-    .select("id, phone_number, waba_id, ycloud_account_id")
-    .eq("id", inboxId)
-    .maybeSingle();
+  const db = getSystemDb();
+  const { data, error } = await findInboxForCredentials(db, inboxId);
   if (error) throw new Error(error.message);
   if (!data?.phone_number) throw new Error("Inbox no encontrado");
 
@@ -181,7 +178,7 @@ export async function upsertYCloudAccount(input: {
   webhookSecret?: string;
   isActive?: boolean;
 }) {
-  const db = createAdminClient();
+  const db = getSystemDb();
   const name = input.name.trim();
   if (!name) throw new Error("El nombre es obligatorio");
 
@@ -198,35 +195,22 @@ export async function upsertYCloudAccount(input: {
     if (input.webhookSecret?.trim()) {
       patch.webhook_secret_encrypted = encryptSecret(input.webhookSecret.trim());
     }
-    const { data, error } = await db
-      .from("ycloud_accounts")
-      .update(patch)
-      .eq("id", input.id)
-      .select(
-        "id, name, api_key_encrypted, webhook_secret_encrypted, ycloud_webhook_endpoint_id, api_key_last4, is_active",
-      )
-      .single();
+    const { data, error } = await updateYCloudAccount(db, input.id, patch);
     if (error || !data) throw new Error(error?.message ?? "update_failed");
     return data as YCloudAccountRow;
   }
 
   const apiKey = input.apiKey?.trim();
   if (!apiKey) throw new Error("La API key es obligatoria");
-  const { data, error } = await db
-    .from("ycloud_accounts")
-    .insert({
-      name,
-      api_key_encrypted: encryptSecret(apiKey),
-      api_key_last4: secretLast4(apiKey),
-      webhook_secret_encrypted: input.webhookSecret?.trim()
-        ? encryptSecret(input.webhookSecret.trim())
-        : null,
-      is_active: input.isActive ?? true,
-    })
-    .select(
-      "id, name, api_key_encrypted, webhook_secret_encrypted, ycloud_webhook_endpoint_id, api_key_last4, is_active",
-    )
-    .single();
+  const { data, error } = await insertYCloudAccount(db, {
+    name,
+    api_key_encrypted: encryptSecret(apiKey),
+    api_key_last4: secretLast4(apiKey),
+    webhook_secret_encrypted: input.webhookSecret?.trim()
+      ? encryptSecret(input.webhookSecret.trim())
+      : null,
+    is_active: input.isActive ?? true,
+  });
   if (error || !data) throw new Error(error?.message ?? "create_failed");
   return data as YCloudAccountRow;
 }
@@ -271,15 +255,12 @@ export async function ensureYCloudWebhook(accountId: string) {
   }
 
   const secret = endpoint.secret?.trim() || creds.webhookSecret;
-  const db = createAdminClient();
-  const { error } = await db
-    .from("ycloud_accounts")
-    .update({
-      ycloud_webhook_endpoint_id: endpoint.id,
-      webhook_secret_encrypted: secret ? encryptSecret(secret) : creds.row.webhook_secret_encrypted,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", accountId);
+  const db = getSystemDb();
+  const { error } = await saveYCloudAccountWebhook(db, accountId, {
+    ycloud_webhook_endpoint_id: endpoint.id,
+    webhook_secret_encrypted: secret ? encryptSecret(secret) : creds.row.webhook_secret_encrypted,
+    updated_at: new Date().toISOString(),
+  });
   if (error) throw new Error(error.message);
 
   return {
@@ -316,7 +297,7 @@ function envAccountSpecs() {
 }
 
 export async function seedYCloudAccountsFromEnv() {
-  const db = createAdminClient();
+  const db = getSystemDb();
   const existing = await listYCloudAccountRows();
   const created: YCloudAccountRow[] = [...existing];
 
@@ -339,10 +320,10 @@ export async function seedYCloudAccountsFromEnv() {
 
   const account1 = created.find((r) => r.name === "YCloud 1") ?? created[0];
   if (account1) {
-    const { error } = await db
-      .from("inboxes")
-      .update({ ycloud_account_id: account1.id })
-      .is("ycloud_account_id", null);
+    const { error } = await assignYCloudAccountToUnlinkedInboxes(
+      db,
+      account1.id,
+    );
     if (error) throw new Error(error.message);
   }
 
@@ -373,7 +354,7 @@ export async function restoreLegacyYCloudWebhook(accountId: string) {
 }
 
 export async function syncYCloudPhoneNumbers(accountId: string) {
-  const db = createAdminClient();
+  const db = getSystemDb();
   const creds = await getYCloudAccountCredentials(accountId);
 
   const remote: YCloudPhoneNumber[] = [];
@@ -392,11 +373,8 @@ export async function syncYCloudPhoneNumbers(accountId: string) {
     if (page > 50) break;
   }
 
-  const { data: existing, error: existingError } = await db
-    .from("inboxes")
-    .select(
-      "id, phone_number, ycloud_phone_number_id, name, waba_id, ycloud_account_id",
-    );
+  const { data: existing, error: existingError } =
+    await listInboxesForPhoneSync(db);
   if (existingError) throw new Error(existingError.message);
 
   type InboxRow = NonNullable<typeof existing>[number];
@@ -439,21 +417,15 @@ export async function syncYCloudPhoneNumbers(accountId: string) {
     const match = matchById ?? matchByPhone ?? null;
 
     if (!match) {
-      const { data: inserted, error } = await db
-        .from("inboxes")
-        .insert({
-          company_id: null,
-          name,
-          phone_number: phone,
-          ycloud_phone_number_id: ycloudId,
-          waba_id: wabaId,
-          ycloud_account_id: accountId,
-          is_active: true,
-        })
-        .select(
-          "id, phone_number, ycloud_phone_number_id, name, waba_id, ycloud_account_id",
-        )
-        .single();
+      const { data: inserted, error } = await insertSyncedInbox(db, {
+        company_id: null,
+        name,
+        phone_number: phone,
+        ycloud_phone_number_id: ycloudId,
+        waba_id: wabaId,
+        ycloud_account_id: accountId,
+        is_active: true,
+      });
       if (error) throw new Error(error.message);
       if (inserted) {
         byYCloudId.set(ycloudId, inserted);
@@ -463,16 +435,13 @@ export async function syncYCloudPhoneNumbers(accountId: string) {
       continue;
     }
 
-    const { error } = await db
-      .from("inboxes")
-      .update({
-        name,
-        phone_number: phone,
-        ycloud_phone_number_id: ycloudId,
-        waba_id: wabaId,
-        ycloud_account_id: accountId,
-      })
-      .eq("id", match.id);
+    const { error } = await updateSyncedInbox(db, match.id, {
+      name,
+      phone_number: phone,
+      ycloud_phone_number_id: ycloudId,
+      waba_id: wabaId,
+      ycloud_account_id: accountId,
+    });
     if (error) throw new Error(error.message);
     updated += 1;
     const next = {

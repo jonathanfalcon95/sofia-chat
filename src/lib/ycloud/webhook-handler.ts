@@ -1,5 +1,11 @@
 import { after, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getSystemDb } from "@/lib/db/client";
+import { updateMessagesMediaByYCloudIds } from "@/lib/db/repos/messaging";
+import {
+  processYCloudWebhook,
+  processYCloudWebhookForAccount,
+} from "@/lib/db/repos/ycloud";
+import type { Db } from "@/lib/db/types";
 import { verifyYCloudSignature } from "@/lib/ycloud/signature";
 import { extractInboundMedia } from "@/lib/media";
 import { logSystemError } from "@/lib/errors/log-system-error";
@@ -32,7 +38,7 @@ function parsePayload(rawBody: string) {
 }
 
 async function enrichInboundMedia(
-  supabase: ReturnType<typeof createAdminClient>,
+  supabase: Db,
   eventType: string,
   payload: Record<string, unknown>,
   eventId: string,
@@ -54,17 +60,18 @@ async function enrichInboundMedia(
     .map((v) => (v == null ? "" : String(v)))
     .filter(Boolean);
   if (!media?.mediaUrl || ids.length === 0) return;
-  const { error: mediaError } = await supabase
-    .from("messages")
-    .update({
+  const { error: mediaError } = await updateMessagesMediaByYCloudIds(
+    supabase,
+    ids,
+    {
       type: media.type,
       body: media.body,
       media_url: media.mediaUrl,
       media_mime: media.mediaMime,
       media_filename: media.mediaFilename,
       media_sha256: media.mediaSha256,
-    })
-    .in("ycloud_message_id", ids);
+    },
+  );
   if (mediaError) {
     console.error("webhook media enrich error", mediaError);
     await logSystemError({
@@ -108,17 +115,14 @@ export async function processVerifiedYCloudEvent(args: {
   accountId?: string | null;
   legacySecret?: string;
 }) {
-  const supabase = createAdminClient();
+  const supabase = getSystemDb();
   if (args.accountId) {
-    const { data, error } = await supabase.rpc(
-      "process_ycloud_webhook_for_account",
-      {
-        p_account_id: args.accountId,
-        p_event_id: args.eventId,
-        p_event_type: args.eventType,
-        p_payload: args.payload,
-      },
-    );
+    const { data, error } = await processYCloudWebhookForAccount(supabase, {
+      accountId: args.accountId,
+      eventId: args.eventId,
+      eventType: args.eventType,
+      payload: args.payload,
+    });
     if (error) {
       console.error("webhook rpc error", error);
       await logSystemError({
@@ -137,11 +141,11 @@ export async function processVerifiedYCloudEvent(args: {
   }
 
   const secret = args.legacySecret ?? process.env.YCLOUD_WEBHOOK_SECRET ?? "";
-  const { data, error } = await supabase.rpc("process_ycloud_webhook", {
-    p_secret: secret,
-    p_event_id: args.eventId,
-    p_event_type: args.eventType,
-    p_payload: args.payload,
+  const { data, error } = await processYCloudWebhook(supabase, {
+    secret,
+    eventId: args.eventId,
+    eventType: args.eventType,
+    payload: args.payload,
   });
   if (error) {
     console.error("webhook rpc error", error);

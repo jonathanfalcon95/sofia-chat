@@ -1,8 +1,14 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { getSystemDb } from "@/lib/db/client";
+import {
+  listKanbanCardRows,
+  listKanbanColumnIds,
+  listTaggedConversationIds,
+  listUntaggedConversationIds,
+  searchKanbanContactIds,
+  type KanbanConversationFilters,
+} from "@/lib/db/repos/kanban";
+import type { Db } from "@/lib/db/types";
 import { clampPageSize, ilikePattern } from "@/lib/pagination";
-import { createAdminClient } from "@/lib/supabase/admin";
-
-type AdminClient = ReturnType<typeof createAdminClient>;
 
 export type KanbanCard = {
   id: string;
@@ -74,32 +80,19 @@ function dedupeByContact(cards: KanbanCard[]): KanbanCard[] {
   return out;
 }
 
-const CARD_SELECT = `
-  id, last_message_preview, last_message_at, inbox_id, company_id, contact_id, assignee_id,
-  contacts ( id, name, phone_number ),
-  inboxes ( name )
-`;
-
-type FilterableQuery<Q> = {
-  eq(column: string, value: string): Q;
-  is(column: string, value: null): Q;
-  or(filters: string): Q;
-  ilike(column: string, pattern: string): Q;
-};
-
 async function resolveSearchContactIds(
-  admin: AdminClient,
+  admin: Db,
   companyId: string,
   q: string,
 ): Promise<string[] | null> {
   const search = q.trim();
   if (!search) return null;
   const pattern = ilikePattern(search);
-  const { data: contacts, error } = await admin
-    .from("contacts")
-    .select("id")
-    .eq("company_id", companyId)
-    .or(`name.ilike."${pattern}",phone_number.ilike."${pattern}"`);
+  const { data: contacts, error } = await searchKanbanContactIds(
+    admin,
+    companyId,
+    pattern,
+  );
   if (error) throw new Error(`Kanban search contacts: ${error.message}`);
   return (contacts ?? []).map((c) => c.id as string);
 }
@@ -110,7 +103,7 @@ async function resolveSearchContactIds(
  * are then read with the user's client, so RLS still decides what they can see.
  */
 export async function loadKanbanColumnCards(
-  supabase: SupabaseClient,
+  db: Db,
   filters: KanbanLoadFilters & {
     tagId: string;
     offset?: number;
@@ -124,7 +117,7 @@ export async function loadKanbanColumnCards(
   const from = offset;
   const to = offset + fetchSize - 1;
 
-  const admin = createAdminClient();
+  const admin = getSystemDb();
   const searchContactIds = await resolveSearchContactIds(
     admin,
     filters.companyId,
@@ -134,71 +127,48 @@ export async function loadKanbanColumnCards(
     ? ilikePattern(filters.q!.trim())
     : null;
 
-  const withFilters = <Q,>(query: Q): Q => {
-    let q = query;
-    const on = () => q as unknown as FilterableQuery<Q>;
-    if (filters.inboxId) q = on().eq("inbox_id", filters.inboxId);
-    if (filters.assignee === "mine" && filters.userId) {
-      q = on().eq("assignee_id", filters.userId);
-    } else if (filters.assignee === "unassigned") {
-      q = on().is("assignee_id", null);
-    }
-    if (searchPattern) {
-      q =
-        searchContactIds && searchContactIds.length > 0
-          ? on().or(
-              `contact_id.in.(${searchContactIds.join(",")}),last_message_preview.ilike."${searchPattern}"`,
-            )
-          : on().ilike("last_message_preview", searchPattern);
-    }
-    return q;
+  const conversationFilters: KanbanConversationFilters = {
+    inboxId: filters.inboxId,
+    assignee: filters.assignee,
+    userId: filters.userId,
+    searchPattern,
+    searchContactIds,
   };
 
-  const { data: taggedIds, error: taggedErr } = await withFilters(
-    admin
-      .from("conversations")
-      .select("id, conversation_tags!inner(tag_id)")
-      .eq("company_id", filters.companyId)
-      .eq("conversation_tags.tag_id", filters.tagId),
-  )
-    .order("last_message_at", { ascending: false, nullsFirst: false })
-    .range(from, to);
+  const { data: taggedIds, error: taggedErr } = await listTaggedConversationIds(
+    admin,
+    filters.companyId,
+    filters.tagId,
+    conversationFilters,
+    from,
+    to,
+  );
   if (taggedErr) throw new Error(`Kanban tagged: ${taggedErr.message}`);
 
   let untaggedIds: Array<{ id: unknown }> = [];
   if (filters.includeUntagged) {
-    const { data: kanbanTags, error: tagsErr } = await admin
-      .from("tags")
-      .select("id")
-      .eq("company_id", filters.companyId)
-      .eq("is_kanban_column", true);
+    const { data: kanbanTags, error: tagsErr } = await listKanbanColumnIds(
+      admin,
+      filters.companyId,
+    );
     if (tagsErr) throw new Error(`Kanban tags: ${tagsErr.message}`);
 
     // Anti-join: conversations with no link to any of this company's columns.
-    const { data, error: untaggedErr } = await withFilters(
-      admin
-        .from("conversations")
-        .select("id, conversation_tags(tag_id)")
-        .eq("company_id", filters.companyId)
-        .in(
-          "conversation_tags.tag_id",
-          (kanbanTags ?? []).map((t) => t.id as string),
-        )
-        .is("conversation_tags", null),
-    )
-      .order("last_message_at", { ascending: false, nullsFirst: false })
-      .range(from, to);
+    const { data, error: untaggedErr } = await listUntaggedConversationIds(
+      admin,
+      filters.companyId,
+      (kanbanTags ?? []).map((t) => t.id as string),
+      conversationFilters,
+      from,
+      to,
+    );
     if (untaggedErr) throw new Error(`Kanban untagged: ${untaggedErr.message}`);
     untaggedIds = data ?? [];
   }
 
   const ids = [...(taggedIds ?? []), ...untaggedIds].map((r) => r.id as string);
   const { data: rows, error: rowsErr } = ids.length
-    ? await supabase
-        .from("conversations")
-        .select(CARD_SELECT)
-        .in("id", ids)
-        .order("last_message_at", { ascending: false, nullsFirst: false })
+    ? await listKanbanCardRows(db, ids)
     : { data: [], error: null };
   if (rowsErr) throw new Error(`Kanban cards: ${rowsErr.message}`);
 
@@ -224,7 +194,7 @@ export async function loadKanbanColumnCards(
 }
 
 export async function loadAllKanbanColumns(
-  supabase: SupabaseClient,
+  db: Db,
   filters: KanbanLoadFilters,
   tags: Array<{ id: string }>,
 ): Promise<{
@@ -238,7 +208,7 @@ export async function loadAllKanbanColumns(
 
   const results = await Promise.all(
     tags.map((tag, index) =>
-      loadKanbanColumnCards(supabase, {
+      loadKanbanColumnCards(db, {
         ...filters,
         tagId: tag.id,
         offset: 0,

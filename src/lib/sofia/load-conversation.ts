@@ -1,6 +1,7 @@
 import { normalizePhoneDigits } from "@/lib/conversations/phone-digits";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
+import { getSystemDb, getUserDb } from "@/lib/db/client";
+import { findCompanyGuid, getConversationForSofia } from "@/lib/db/repos/messaging";
+import { findYCloudAccountName } from "@/lib/db/repos/ycloud";
 import {
   getAppSession,
   sessionHasPermission,
@@ -28,18 +29,11 @@ export async function loadSofiaConversation(
   const session = await getAppSession();
   if (!session) return { ok: false, status: 401, error: "unauthorized" };
 
-  const supabase = await createClient();
-  const { data: conversation, error } = await supabase
-    .from("conversations")
-    .select(
-      `
-      id, company_id, inbox_id,
-      inboxes ( phone_number, ycloud_account_id ),
-      contacts ( phone_number, name )
-    `,
-    )
-    .eq("id", conversationId)
-    .single();
+  const supabase = await getUserDb();
+  const { data: conversation, error } = await getConversationForSofia(
+    supabase,
+    conversationId,
+  );
 
   if (error || !conversation) {
     return { ok: false, status: 404, error: "conversation_not_found" };
@@ -67,12 +61,11 @@ export async function loadSofiaConversation(
     return { ok: false, status: 400, error: "missing_phones" };
   }
 
-  const admin = createAdminClient();
-  const { data: company, error: companyError } = await admin
-    .from("companies")
-    .select("guid_company")
-    .eq("id", conversation.company_id as string)
-    .maybeSingle();
+  const admin = getSystemDb();
+  const { data: company, error: companyError } = await findCompanyGuid(
+    admin,
+    conversation.company_id as string,
+  );
   if (companyError) {
     return { ok: false, status: 500, error: companyError.message };
   }
@@ -86,11 +79,10 @@ export async function loadSofiaConversation(
   let accountName: string | null = null;
   const accountId = textField(inbox, "ycloud_account_id");
   if (accountId) {
-    const { data: account, error: accountError } = await admin
-      .from("ycloud_accounts")
-      .select("name")
-      .eq("id", accountId)
-      .maybeSingle();
+    const { data: account, error: accountError } = await findYCloudAccountName(
+      admin,
+      accountId,
+    );
     if (accountError) {
       return { ok: false, status: 500, error: accountError.message };
     }

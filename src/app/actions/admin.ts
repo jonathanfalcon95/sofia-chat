@@ -1,7 +1,44 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+import { getSystemDb, getUserDb, hasServiceRole } from "@/lib/db/client";
+import {
+  insertCompany,
+  updateCompanyById,
+} from "@/lib/db/repos/companies";
+import {
+  assignInboxesToCompany,
+  listActiveCompanyInboxIds,
+  listCompanyInboxIds,
+  listInboxCompaniesByIds,
+  unassignCompanyInboxes,
+  updateInboxById,
+} from "@/lib/db/repos/inboxes";
+import {
+  deleteMembershipInboxes,
+  deleteMembershipInboxLinks,
+  deleteMembershipRoles,
+  findCompanyMembership,
+  insertMembershipInboxes,
+  insertMembershipRole,
+  listCompanyMembershipIds,
+  updateMembershipActive,
+} from "@/lib/db/repos/memberships";
+import { updateProfileFullName } from "@/lib/db/repos/profiles";
+import {
+  deleteRolePermissionsByIds,
+  deleteRolePermissionsByRole,
+  findCompanyRole,
+  insertRole,
+  insertRolePermissionRows,
+  listPermissionsByCodes,
+  listRolePermissionCodes,
+  listRolePermissionRows,
+  listTemplateRolesWithPermissions,
+  updateCompanyRole,
+} from "@/lib/db/repos/roles";
+import { insertTags, updateContactDetails } from "@/lib/db/repos/tags";
+import type { Db } from "@/lib/db/types";
 import { getAppSession, sessionHasPermission } from "@/lib/rbac/session";
 import {
   isPlatformPermission,
@@ -18,19 +55,16 @@ import {
 } from "@/lib/ycloud/accounts";
 
 async function assignCompanyInboxes(companyId: string, inboxIds: string[]) {
-  const { createAdminClient, hasServiceRole } = await import(
-    "@/lib/supabase/admin"
-  );
   const db = hasServiceRole()
-    ? createAdminClient()
-    : await createClient();
+    ? getSystemDb()
+    : await getUserDb();
 
   const selected = Array.from(new Set(inboxIds.filter(Boolean)));
 
-  const { data: current, error: currentError } = await db
-    .from("inboxes")
-    .select("id")
-    .eq("company_id", companyId);
+  const { data: current, error: currentError } = await listCompanyInboxIds(
+    db,
+    companyId,
+  );
   if (currentError) throw new Error(currentError.message);
 
   const currentIds = (current ?? []).map((i) => i.id as string);
@@ -38,10 +72,8 @@ async function assignCompanyInboxes(companyId: string, inboxIds: string[]) {
   const toAssign = selected.filter((id) => !currentIds.includes(id));
 
   if (toAssign.length) {
-    const { data: assignable, error: assignableError } = await db
-      .from("inboxes")
-      .select("id, company_id")
-      .in("id", toAssign);
+    const { data: assignable, error: assignableError } =
+      await listInboxCompaniesByIds(db, toAssign);
     if (assignableError) throw new Error(assignableError.message);
     const invalid = (assignable ?? []).filter(
       (i) => i.company_id != null && i.company_id !== companyId,
@@ -52,33 +84,24 @@ async function assignCompanyInboxes(companyId: string, inboxIds: string[]) {
     if ((assignable ?? []).length !== toAssign.length) {
       throw new Error("Uno o más inboxes no existen");
     }
-    const { error } = await db
-      .from("inboxes")
-      .update({ company_id: companyId })
-      .in("id", toAssign);
+    const { error } = await assignInboxesToCompany(db, toAssign, companyId);
     if (error) throw new Error(error.message);
   }
 
   if (toUnassign.length) {
-    const { data: memberships, error: membershipsError } = await db
-      .from("company_memberships")
-      .select("id")
-      .eq("company_id", companyId);
+    const { data: memberships, error: membershipsError } =
+      await listCompanyMembershipIds(db, companyId);
     if (membershipsError) throw new Error(membershipsError.message);
     const membershipIds = (memberships ?? []).map((m) => m.id as string);
     if (membershipIds.length) {
-      const { error: miError } = await db
-        .from("membership_inboxes")
-        .delete()
-        .in("membership_id", membershipIds)
-        .in("inbox_id", toUnassign);
+      const { error: miError } = await deleteMembershipInboxLinks(
+        db,
+        membershipIds,
+        toUnassign,
+      );
       if (miError) throw new Error(miError.message);
     }
-    const { error } = await db
-      .from("inboxes")
-      .update({ company_id: null })
-      .in("id", toUnassign)
-      .eq("company_id", companyId);
+    const { error } = await unassignCompanyInboxes(db, toUnassign, companyId);
     if (error) throw new Error(error.message);
   }
 }
@@ -91,42 +114,31 @@ export async function createCompany(input: {
 }) {
   const session = await getAppSession();
   if (!session?.isPlatformAdmin) throw new Error("forbidden");
-  const supabase = await createClient();
+  const db = await getUserDb();
 
-  const { data: company, error } = await supabase
-    .from("companies")
-    .insert({
-      name: input.name,
-      slug: input.slug,
-      guid_company: input.guidCompany?.trim() || null,
-    })
-    .select("id")
-    .single();
+  const { data: company, error } = await insertCompany(db, {
+    name: input.name,
+    slug: input.slug,
+    guid_company: input.guidCompany?.trim() || null,
+  });
   if (error || !company) throw new Error(error?.message ?? "create_failed");
 
-  const { data: templates } = await supabase
-    .from("roles")
-    .select("id, name, description, role_permissions(permission_id)")
-    .is("company_id", null);
+  const { data: templates } = await listTemplateRolesWithPermissions(db);
 
   for (const template of templates ?? []) {
-    const { data: role } = await supabase
-      .from("roles")
-      .insert({
-        company_id: company.id,
-        name: template.name,
-        description: template.description,
-        is_system: true,
-      })
-      .select("id")
-      .single();
+    const { data: role } = await insertRole(db, {
+      company_id: company.id,
+      name: template.name,
+      description: template.description,
+      is_system: true,
+    });
     if (!role) continue;
     const perms =
       template.role_permissions?.map((rp: { permission_id: string }) => ({
         role_id: role.id,
         permission_id: rp.permission_id,
       })) ?? [];
-    if (perms.length) await supabase.from("role_permissions").insert(perms);
+    if (perms.length) await insertRolePermissionRows(db, perms);
   }
 
   const salesTags = [
@@ -139,7 +151,8 @@ export async function createCompany(input: {
     ["Perdido", "#ef4444", 7],
   ] as const;
 
-  await supabase.from("tags").insert(
+  await insertTags(
+    db,
     salesTags.map(([name, color, position]) => ({
       company_id: company.id,
       name,
@@ -168,16 +181,13 @@ export async function updateCompany(input: {
 }) {
   const session = await getAppSession();
   if (!session?.isPlatformAdmin) throw new Error("forbidden");
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("companies")
-    .update({
-      name: input.name,
-      slug: input.slug,
-      is_active: input.isActive,
-      guid_company: input.guidCompany?.trim() || null,
-    })
-    .eq("id", input.id);
+  const db = await getUserDb();
+  const { error } = await updateCompanyById(db, input.id, {
+    name: input.name,
+    slug: input.slug,
+    is_active: input.isActive,
+    guid_company: input.guidCompany?.trim() || null,
+  });
   if (error) throw new Error(error.message);
 
   await assignCompanyInboxes(input.id, input.inboxIds);
@@ -221,7 +231,7 @@ export async function syncYCloudInboxes(accountId: string) {
   const session = await getAppSession();
   if (!session?.isPlatformAdmin) throw new Error("forbidden");
   if (!accountId) throw new Error("Selecciona una cuenta YCloud");
-  if (!(await import("@/lib/supabase/admin")).hasServiceRole()) {
+  if (!hasServiceRole()) {
     throw new Error("SUPABASE_SERVICE_ROLE_KEY no configurada");
   }
 
@@ -239,41 +249,34 @@ export async function updateInbox(input: {
   const session = await getAppSession();
   if (!session?.isPlatformAdmin) throw new Error("forbidden");
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("inboxes")
-    .update({
-      name: input.name,
-      is_active: input.isActive,
-    })
-    .eq("id", input.id);
+  const db = await getUserDb();
+  const { error } = await updateInboxById(db, input.id, {
+    name: input.name,
+    is_active: input.isActive,
+  });
   if (error) throw new Error(error.message);
   revalidatePath("/inboxes");
   revalidatePath("/companies");
 }
 
-type AppSupabase = Awaited<ReturnType<typeof createClient>>;
-
 async function insertRolePermissions(
-  supabase: AppSupabase,
+  db: Db,
   roleId: string,
   codes: string[],
 ) {
   if (!codes.length) return;
-  const { data: perms, error } = await supabase
-    .from("permissions")
-    .select("id, code")
-    .in("code", codes);
+  const { data: perms, error } = await listPermissionsByCodes(db, codes);
   if (error) throw new Error(error.message);
   if (!perms?.length) return;
-  const { error: insertError } = await supabase.from("role_permissions").insert(
+  const { error: insertError } = await insertRolePermissionRows(
+    db,
     perms.map((p) => ({ role_id: roleId, permission_id: p.id })),
   );
   if (insertError) throw new Error(insertError.message);
 }
 
 async function replaceRolePermissions(
-  supabase: AppSupabase,
+  db: Db,
   roleId: string,
   codes: string[],
   isPlatformAdmin: boolean,
@@ -283,16 +286,11 @@ async function replaceRolePermissions(
     : codes.filter((code) => !isPlatformPermission(code));
 
   if (isPlatformAdmin) {
-    const { error } = await supabase
-      .from("role_permissions")
-      .delete()
-      .eq("role_id", roleId);
+    const { error } = await deleteRolePermissionsByRole(db, roleId);
     if (error) throw new Error(error.message);
   } else {
-    const { data: existing, error: existingError } = await supabase
-      .from("role_permissions")
-      .select("id, permissions(code)")
-      .eq("role_id", roleId);
+    const { data: existing, error: existingError } =
+      await listRolePermissionRows(db, roleId);
     if (existingError) throw new Error(existingError.message);
     const idsToDelete = (existing ?? [])
       .filter((row) => {
@@ -304,15 +302,12 @@ async function replaceRolePermissions(
       })
       .map((row) => row.id as string);
     if (idsToDelete.length) {
-      const { error } = await supabase
-        .from("role_permissions")
-        .delete()
-        .in("id", idsToDelete);
+      const { error } = await deleteRolePermissionsByIds(db, idsToDelete);
       if (error) throw new Error(error.message);
     }
   }
 
-  await insertRolePermissions(supabase, roleId, codesToInsert);
+  await insertRolePermissions(db, roleId, codesToInsert);
 }
 
 export async function createRole(input: {
@@ -339,20 +334,16 @@ export async function createRole(input: {
     session.isPlatformAdmin,
   );
 
-  const supabase = await createClient();
-  const { data: role, error } = await supabase
-    .from("roles")
-    .insert({
-      company_id: input.companyId,
-      name: input.name,
-      description: input.description ?? null,
-      is_system: false,
-    })
-    .select("id")
-    .single();
+  const db = await getUserDb();
+  const { data: role, error } = await insertRole(db, {
+    company_id: input.companyId,
+    name: input.name,
+    description: input.description ?? null,
+    is_system: false,
+  });
   if (error || !role) throw new Error(error?.message ?? "role_failed");
 
-  await insertRolePermissions(supabase, role.id, permissionCodes);
+  await insertRolePermissions(db, role.id, permissionCodes);
 
   revalidatePath("/settings/roles");
 }
@@ -376,11 +367,9 @@ export async function updateRole(input: {
     throw new Error("Ese nombre de rol está reservado");
   }
 
-  const supabase = await createClient();
-  const { data: existingRows, error: existingError } = await supabase
-    .from("role_permissions")
-    .select("permissions(code)")
-    .eq("role_id", input.id);
+  const db = await getUserDb();
+  const { data: existingRows, error: existingError } =
+    await listRolePermissionCodes(db, input.id);
   if (existingError) throw new Error(existingError.message);
 
   const existingCodes = (existingRows ?? [])
@@ -398,18 +387,14 @@ export async function updateRole(input: {
     session.isPlatformAdmin,
   );
 
-  const { error } = await supabase
-    .from("roles")
-    .update({
-      name: input.name,
-      description: input.description ?? null,
-    })
-    .eq("id", input.id)
-    .eq("company_id", input.companyId);
+  const { error } = await updateCompanyRole(db, input.id, input.companyId, {
+    name: input.name,
+    description: input.description ?? null,
+  });
   if (error) throw new Error(error.message);
 
   await replaceRolePermissions(
-    supabase,
+    db,
     input.id,
     permissionCodes,
     session.isPlatformAdmin,
@@ -421,21 +406,16 @@ async function assignMembershipInboxes(
   membershipId: string,
   inboxIds: string[],
 ) {
-  const { createAdminClient, hasServiceRole } = await import(
-    "@/lib/supabase/admin"
-  );
   const db = hasServiceRole()
-    ? createAdminClient()
-    : await createClient();
+    ? getSystemDb()
+    : await getUserDb();
 
-  const { error: delError } = await db
-    .from("membership_inboxes")
-    .delete()
-    .eq("membership_id", membershipId);
+  const { error: delError } = await deleteMembershipInboxes(db, membershipId);
   if (delError) throw new Error(delError.message);
 
   if (inboxIds.length) {
-    const { error } = await db.from("membership_inboxes").insert(
+    const { error } = await insertMembershipInboxes(
+      db,
       inboxIds.map((inboxId) => ({
         membership_id: membershipId,
         inbox_id: inboxId,
@@ -468,42 +448,34 @@ export async function updateMembership(input: {
     throw new Error("Debes asignar al menos un inbox");
   }
 
-  const { createAdminClient, hasServiceRole } = await import(
-    "@/lib/supabase/admin"
-  );
   const db = hasServiceRole()
-    ? createAdminClient()
-    : await createClient();
+    ? getSystemDb()
+    : await getUserDb();
 
   // The permission above only covers input.companyId; writes below use ids
   // from the client with the service role, so tie them to that company first.
-  const { data: membership, error: membershipCheckError } = await db
-    .from("company_memberships")
-    .select("id")
-    .eq("id", input.membershipId)
-    .eq("company_id", input.companyId)
-    .eq("user_id", input.userId)
-    .maybeSingle();
+  const { data: membership, error: membershipCheckError } =
+    await findCompanyMembership(
+      db,
+      input.membershipId,
+      input.companyId,
+      input.userId,
+    );
   if (membershipCheckError) throw new Error(membershipCheckError.message);
   if (!membership) throw new Error("forbidden");
 
   if (input.roleId) {
-    const { data: role, error: roleCheckError } = await db
-      .from("roles")
-      .select("id")
-      .eq("id", input.roleId)
-      .eq("company_id", input.companyId)
-      .maybeSingle();
+    const { data: role, error: roleCheckError } = await findCompanyRole(
+      db,
+      input.roleId,
+      input.companyId,
+    );
     if (roleCheckError) throw new Error(roleCheckError.message);
     if (!role) throw new Error("El rol no pertenece a la empresa");
   }
 
-  const { data: validInboxes, error: inboxCheckError } = await db
-    .from("inboxes")
-    .select("id")
-    .eq("company_id", input.companyId)
-    .eq("is_active", true)
-    .in("id", input.inboxIds);
+  const { data: validInboxes, error: inboxCheckError } =
+    await listActiveCompanyInboxIds(db, input.companyId, input.inboxIds);
   if (inboxCheckError) throw new Error(inboxCheckError.message);
   if ((validInboxes?.length ?? 0) !== input.inboxIds.length) {
     throw new Error(
@@ -511,28 +483,30 @@ export async function updateMembership(input: {
     );
   }
 
-  const { error: mErr } = await db
-    .from("company_memberships")
-    .update({ is_active: input.isActive })
-    .eq("id", input.membershipId);
+  const { error: mErr } = await updateMembershipActive(
+    db,
+    input.membershipId,
+    input.isActive,
+  );
   if (mErr) throw new Error(mErr.message);
 
   if (input.fullName) {
-    const { error: pErr } = await db
-      .from("profiles")
-      .update({ full_name: input.fullName })
-      .eq("id", input.userId);
+    const { error: pErr } = await updateProfileFullName(
+      db,
+      input.userId,
+      input.fullName,
+    );
     if (pErr) throw new Error(pErr.message);
   }
 
-  const { error: delRolesErr } = await db
-    .from("membership_roles")
-    .delete()
-    .eq("membership_id", input.membershipId);
+  const { error: delRolesErr } = await deleteMembershipRoles(
+    db,
+    input.membershipId,
+  );
   if (delRolesErr) throw new Error(delRolesErr.message);
 
   if (input.roleId) {
-    const { error: roleErr } = await db.from("membership_roles").insert({
+    const { error: roleErr } = await insertMembershipRole(db, {
       membership_id: input.membershipId,
       role_id: input.roleId,
     });
@@ -548,14 +522,14 @@ export async function updateContact(input: {
   name: string;
   phoneNumber: string;
 }) {
-  const supabase = await createClient();
+  const db = await getUserDb();
   const phone = input.phoneNumber.startsWith("+")
     ? input.phoneNumber
     : `+${input.phoneNumber}`;
-  const { error } = await supabase
-    .from("contacts")
-    .update({ name: input.name, phone_number: phone })
-    .eq("id", input.id);
+  const { error } = await updateContactDetails(db, input.id, {
+    name: input.name,
+    phone_number: phone,
+  });
   if (error) throw new Error(error.message);
   revalidatePath("/contacts");
 }

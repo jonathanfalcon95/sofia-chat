@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   resolveChatByCompanyGuidAndPhone,
-  type ResolveChatClient,
+  type ResolveChatRepository,
   type ResolveChatSession,
 } from "./resolve-chat-core.ts";
 
@@ -31,47 +31,44 @@ function session(overrides: Partial<ResolveChatSession> = {}): ResolveChatSessio
   };
 }
 
-function queuedClient(
+type Call = [operation: string, ...args: unknown[]];
+
+/** Answers each repository call with the next queued response and records it. */
+function queuedRepository(
   responses: Array<{ data: unknown }>,
-): ResolveChatClient {
+): ResolveChatRepository & { calls: Call[] } {
   let i = 0;
+  const calls: Call[] = [];
+  const answer = <T,>(call: Call) => {
+    calls.push(call);
+    return Promise.resolve((responses[i++] ?? { data: null }) as { data: T });
+  };
   return {
-    from() {
-      const res = responses[i++] ?? { data: null };
-      const builder: Record<string, unknown> = {};
-      const self = () => builder;
-      builder.select = self;
-      builder.eq = self;
-      builder.in = self;
-      builder.order = self;
-      builder.limit = self;
-      builder.maybeSingle = () => {
-        const data = Array.isArray(res.data) ? (res.data[0] ?? null) : res.data;
-        return Promise.resolve({ data, error: null });
-      };
-      builder.then = (
-        onFulfilled: (value: { data: unknown; error: null }) => unknown,
-        onRejected?: (reason: unknown) => unknown,
-      ) => Promise.resolve({ data: res.data, error: null }).then(onFulfilled, onRejected);
-      return builder;
-    },
+    calls,
+    findCompanyByGuid: (guid) => answer(["findCompanyByGuid", guid]),
+    findCompanyById: (companyId) => answer(["findCompanyById", companyId]),
+    listContactsByPhoneNumbers: (companyId, phoneNumbers) =>
+      answer(["listContactsByPhoneNumbers", companyId, phoneNumbers]),
+    listLatestConversationOfContacts: (companyId, contactIds) =>
+      answer(["listLatestConversationOfContacts", companyId, contactIds]),
   };
 }
 
 test("resolve returns not_found for empty guid or non-numeric phone", async () => {
-  const client = queuedClient([]);
+  const repository = queuedRepository([]);
   assert.deepEqual(
-    await resolveChatByCompanyGuidAndPhone(session(), "  ", "584241889634", client),
+    await resolveChatByCompanyGuidAndPhone(session(), "  ", "584241889634", repository),
     { ok: false, error: "not_found" },
   );
   assert.deepEqual(
-    await resolveChatByCompanyGuidAndPhone(session(), GUID, "abc", client),
+    await resolveChatByCompanyGuidAndPhone(session(), GUID, "abc", repository),
     { ok: false, error: "not_found" },
   );
+  assert.deepEqual(repository.calls, []);
 });
 
 test("resolve finds company by guid_company and latest chat for +digits or digits", async () => {
-  const client = queuedClient([
+  const repository = queuedRepository([
     { data: { id: COMPANY_ID } },
     { data: [{ id: CONTACT_ID }] },
     { data: [{ id: CONV_ID }] },
@@ -80,17 +77,26 @@ test("resolve finds company by guid_company and latest chat for +digits or digit
     session(),
     GUID,
     "584241889634",
-    client,
+    repository,
   );
   assert.deepEqual(result, {
     ok: true,
     conversationId: CONV_ID,
     companyId: COMPANY_ID,
   });
+  assert.deepEqual(repository.calls, [
+    ["findCompanyByGuid", GUID],
+    [
+      "listContactsByPhoneNumbers",
+      COMPANY_ID,
+      ["+584241889634", "584241889634"],
+    ],
+    ["listLatestConversationOfContacts", COMPANY_ID, [CONTACT_ID]],
+  ]);
 });
 
 test("resolve falls back to companies.id when guid_company misses", async () => {
-  const client = queuedClient([
+  const repository = queuedRepository([
     { data: null },
     { data: { id: COMPANY_ID } },
     { data: [{ id: CONTACT_ID }] },
@@ -100,13 +106,17 @@ test("resolve falls back to companies.id when guid_company misses", async () => 
     session(),
     COMPANY_ID,
     "+58 424 188 9634",
-    client,
+    repository,
   );
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.conversationId, CONV_ID);
     assert.equal(result.companyId, COMPANY_ID);
   }
+  assert.deepEqual(repository.calls.slice(0, 2), [
+    ["findCompanyByGuid", COMPANY_ID],
+    ["findCompanyById", COMPANY_ID],
+  ]);
 });
 
 test("resolve hides missing company, permission, contact, and chat as not_found", async () => {
@@ -115,7 +125,7 @@ test("resolve hides missing company, permission, contact, and chat as not_found"
       session(),
       GUID,
       "584241889634",
-      queuedClient([{ data: null }, { data: null }]),
+      queuedRepository([{ data: null }, { data: null }]),
     ),
     { ok: false, error: "not_found" },
   );
@@ -125,7 +135,7 @@ test("resolve hides missing company, permission, contact, and chat as not_found"
       session({ memberships: [] }),
       GUID,
       "584241889634",
-      queuedClient([{ data: { id: COMPANY_ID } }]),
+      queuedRepository([{ data: { id: COMPANY_ID } }]),
     ),
     { ok: false, error: "not_found" },
   );
@@ -135,7 +145,7 @@ test("resolve hides missing company, permission, contact, and chat as not_found"
       session(),
       GUID,
       "584241889634",
-      queuedClient([{ data: { id: COMPANY_ID } }, { data: [] }]),
+      queuedRepository([{ data: { id: COMPANY_ID } }, { data: [] }]),
     ),
     { ok: false, error: "not_found" },
   );
@@ -145,7 +155,7 @@ test("resolve hides missing company, permission, contact, and chat as not_found"
       session(),
       GUID,
       "584241889634",
-      queuedClient([
+      queuedRepository([
         { data: { id: COMPANY_ID } },
         { data: [{ id: CONTACT_ID }] },
         { data: [] },

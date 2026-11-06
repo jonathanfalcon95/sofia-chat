@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getSystemDb, getUserDb } from "@/lib/db/client";
+import {
+  getConversationForSending,
+  insertMessage,
+  updateConversationLastMessage,
+} from "@/lib/db/repos/messaging";
+import { uploadChatMedia } from "@/lib/db/repos/storage";
 import {
   sendWhatsAppMedia,
   uploadWhatsAppMedia,
@@ -77,18 +82,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const supabase = await createClient();
-  const { data: conversation, error } = await supabase
-    .from("conversations")
-    .select(
-      `
-      id, company_id, window_expires_at, inbox_id,
-      inboxes ( phone_number ),
-      contacts ( phone_number )
-    `,
-    )
-    .eq("id", conversationId)
-    .single();
+  const supabase = await getUserDb();
+  const { data: conversation, error } = await getConversationForSending(
+    supabase,
+    conversationId,
+  );
 
   if (error || !conversation) {
     return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
@@ -182,17 +180,17 @@ export async function POST(request: Request) {
           ? "Imagen"
           : filename);
 
-    const admin = createAdminClient();
+    const admin = getSystemDb();
     const bytes = Buffer.from(await file.arrayBuffer());
     const objectPath = `${conversation.company_id}/${conversationId}/${crypto.randomUUID()}-${filename.replace(/[^\w.\-]+/g, "_")}`;
 
     let mediaUrl: string | null = null;
-    const { error: uploadError } = await admin.storage
-      .from("chat-media")
-      .upload(objectPath, bytes, {
-        contentType: mime,
-        upsert: false,
-      });
+    const { error: uploadError } = await uploadChatMedia(
+      admin,
+      objectPath,
+      bytes,
+      mime,
+    );
     if (!uploadError) {
       mediaUrl = storageMediaUrl(objectPath);
     } else {
@@ -209,31 +207,27 @@ export async function POST(request: Request) {
       });
     }
 
-    const { data: message, error: msgError } = await admin
-      .from("messages")
-      .insert({
-        conversation_id: conversationId,
-        company_id: conversation.company_id,
-        direction: "outbound",
-        type: waType,
-        body: preview,
-        ycloud_message_id: ycloudId,
-        wamid,
-        reply_to_wamid: replyToWamid ?? null,
-        status: "accepted",
-        sent_by: session.userId,
-        media_mime: mime,
-        media_filename: filename,
-        media_url: mediaUrl,
-        raw_payload: {
-          upload: uploaded.raw,
-          send: ycloudRes,
-          mediaId: uploaded.id,
-          storagePath: objectPath,
-        },
-      })
-      .select("*")
-      .single();
+    const { data: message, error: msgError } = await insertMessage(admin, {
+      conversation_id: conversationId,
+      company_id: conversation.company_id,
+      direction: "outbound",
+      type: waType,
+      body: preview,
+      ycloud_message_id: ycloudId,
+      wamid,
+      reply_to_wamid: replyToWamid ?? null,
+      status: "accepted",
+      sent_by: session.userId,
+      media_mime: mime,
+      media_filename: filename,
+      media_url: mediaUrl,
+      raw_payload: {
+        upload: uploaded.raw,
+        send: ycloudRes,
+        mediaId: uploaded.id,
+        storagePath: objectPath,
+      },
+    });
 
     if (msgError) {
       await logSystemError({
@@ -249,13 +243,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
-    await admin
-      .from("conversations")
-      .update({
-        last_message_at: new Date().toISOString(),
-        last_message_preview: preview.slice(0, 200),
-      })
-      .eq("id", conversationId);
+    await updateConversationLastMessage(admin, conversationId, {
+      last_message_at: new Date().toISOString(),
+      last_message_preview: preview.slice(0, 200),
+    });
 
     return NextResponse.json({ message, ycloud: ycloudRes });
   } catch (err) {

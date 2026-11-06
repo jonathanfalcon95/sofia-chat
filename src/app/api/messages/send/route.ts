@@ -1,6 +1,10 @@
 import { after, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getSystemDb, getUserDb } from "@/lib/db/client";
+import {
+  getConversationForSending,
+  insertMessage,
+  updateConversationLastMessage,
+} from "@/lib/db/repos/messaging";
 import { sendWhatsAppText, sendWhatsAppTemplate } from "@/lib/ycloud/client";
 import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { isWithinCustomerWindow } from "@/lib/utils";
@@ -12,7 +16,7 @@ import { logSystemError } from "@/lib/errors/log-system-error";
 import { mirrorManualMessage } from "@/lib/smartsales/mirror-manual-message";
 
 export async function POST(request: Request) {
-  const supabase = await createClient();
+  const supabase = await getUserDb();
   const session = await getAppSession();
   if (!session) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -22,17 +26,10 @@ export async function POST(request: Request) {
   const conversationId = body.conversationId as string;
   const mode = (body.mode as "text" | "template") ?? "text";
 
-  const { data: conversation, error } = await supabase
-    .from("conversations")
-    .select(
-      `
-      id, company_id, window_expires_at, inbox_id,
-      inboxes ( phone_number ),
-      contacts ( phone_number )
-    `,
-    )
-    .eq("id", conversationId)
-    .single();
+  const { data: conversation, error } = await getConversationForSending(
+    supabase,
+    conversationId,
+  );
 
   if (error || !conversation) {
     return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
@@ -78,7 +75,7 @@ export async function POST(request: Request) {
 
   // Persist with service role after authz checks so a successful YCloud send
   // cannot be orphaned by messages INSERT RLS.
-  const admin = createAdminClient();
+  const admin = getSystemDb();
 
   try {
     if (mode === "text") {
@@ -117,23 +114,19 @@ export async function POST(request: Request) {
           ? ycloudId
           : null);
 
-      const { data: message, error: msgError } = await admin
-        .from("messages")
-        .insert({
-          conversation_id: conversationId,
-          company_id: conversation.company_id,
-          direction: "outbound",
-          type: "text",
-          body: text,
-          ycloud_message_id: ycloudId,
-          wamid,
-          reply_to_wamid: replyToWamid ?? null,
-          status: "accepted",
-          sent_by: session.userId,
-          raw_payload: ycloudRes,
-        })
-        .select("*")
-        .single();
+      const { data: message, error: msgError } = await insertMessage(admin, {
+        conversation_id: conversationId,
+        company_id: conversation.company_id,
+        direction: "outbound",
+        type: "text",
+        body: text,
+        ycloud_message_id: ycloudId,
+        wamid,
+        reply_to_wamid: replyToWamid ?? null,
+        status: "accepted",
+        sent_by: session.userId,
+        raw_payload: ycloudRes,
+      });
 
       if (msgError) {
         await logSystemError({
@@ -149,13 +142,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: msgError.message }, { status: 500 });
       }
 
-      await admin
-        .from("conversations")
-        .update({
-          last_message_at: new Date().toISOString(),
-          last_message_preview: text.slice(0, 200),
-        })
-        .eq("id", conversationId);
+      await updateConversationLastMessage(admin, conversationId, {
+        last_message_at: new Date().toISOString(),
+        last_message_preview: text.slice(0, 200),
+      });
 
       const companyId = conversation.company_id as string;
       const userId = session.userId;
@@ -228,24 +218,20 @@ export async function POST(request: Request) {
       (ycloudRes.messageId as string | undefined) ||
       null;
 
-    const { data: message, error: msgError } = await admin
-      .from("messages")
-      .insert({
-        conversation_id: conversationId,
-        company_id: conversation.company_id,
-        direction: "outbound",
-        type: "template",
-        body: `Plantilla: ${templateName}`,
-        template_name: templateName,
-        template_language: languageCode,
-        template_components: body.components ?? [],
-        ycloud_message_id: ycloudId,
-        status: "accepted",
-        sent_by: session.userId,
-        raw_payload: ycloudRes,
-      })
-      .select("*")
-      .single();
+    const { data: message, error: msgError } = await insertMessage(admin, {
+      conversation_id: conversationId,
+      company_id: conversation.company_id,
+      direction: "outbound",
+      type: "template",
+      body: `Plantilla: ${templateName}`,
+      template_name: templateName,
+      template_language: languageCode,
+      template_components: body.components ?? [],
+      ycloud_message_id: ycloudId,
+      status: "accepted",
+      sent_by: session.userId,
+      raw_payload: ycloudRes,
+    });
 
     if (msgError) {
       await logSystemError({
@@ -261,14 +247,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: msgError.message }, { status: 500 });
     }
 
-    await admin
-      .from("conversations")
-      .update({
-        last_message_at: new Date().toISOString(),
-        last_message_preview: `Plantilla: ${templateName}`,
-        status: "open",
-      })
-      .eq("id", conversationId);
+    await updateConversationLastMessage(admin, conversationId, {
+      last_message_at: new Date().toISOString(),
+      last_message_preview: `Plantilla: ${templateName}`,
+      status: "open",
+    });
 
     return NextResponse.json({ message, ycloud: ycloudRes });
   } catch (err) {

@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { updateErrorLog } from "@/lib/db/repos/errors";
 import {
   getAppSession,
   sessionHasAnyPermission,
@@ -23,19 +24,16 @@ export async function updateErrorLogStatus(input: {
     throw new Error("forbidden");
   }
 
-  const supabase = await createClient();
+  const supabase = await getUserDb();
   const isClosed =
     input.status === "resolved" || input.status === "ignored";
 
-  const { error } = await supabase
-    .from("error_logs")
-    .update({
-      status: input.status,
-      resolved_at: isClosed ? new Date().toISOString() : null,
-      resolved_by: isClosed ? session.userId : null,
-      resolution_note: input.resolutionNote?.trim() || null,
-    })
-    .eq("id", input.id);
+  const { error } = await updateErrorLog(supabase, input.id, {
+    status: input.status,
+    resolved_at: isClosed ? new Date().toISOString() : null,
+    resolved_by: isClosed ? session.userId : null,
+    resolution_note: input.resolutionNote?.trim() || null,
+  });
 
   if (error) throw new Error(error.message);
   revalidatePath("/settings/error-logs");

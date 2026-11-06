@@ -1,4 +1,11 @@
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getSystemDb } from "@/lib/db/client";
+import {
+  getConversationInbox,
+  listEnrichableMessagesByYCloudIds,
+  updateConversationPreviewIfUnchanged,
+  updateMessageBodyIfUnchanged,
+} from "@/lib/db/repos/messaging";
+import type { Db } from "@/lib/db/types";
 import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { getWhatsAppTemplate } from "@/lib/ycloud/client";
 import { extractReplyText } from "@/lib/ycloud/inbound-message-display";
@@ -11,8 +18,6 @@ import {
  * Fills in text process_ycloud_event can't produce on its own: template bodies,
  * which need the definition from YCloud, and customers' button replies.
  */
-
-type Db = ReturnType<typeof createAdminClient>;
 
 export type EnrichableMessage = {
   id: string;
@@ -28,8 +33,7 @@ export type ResolvedText = {
   source: "template" | "template_fallback" | "reply";
 };
 
-export const ENRICHABLE_MESSAGE_SELECT =
-  "id, type, body, conversation_id, created_at";
+export { ENRICHABLE_MESSAGE_SELECT } from "@/lib/db/repos/messaging";
 
 const DEFINITION_TTL_MS = 10 * 60 * 1000;
 const definitionCache = new Map<
@@ -77,11 +81,10 @@ async function resolveTemplateText(
   };
 
   try {
-    const { data: conversation, error } = await db
-      .from("conversations")
-      .select("inbox_id")
-      .eq("id", row.conversation_id)
-      .single();
+    const { data: conversation, error } = await getConversationInbox(
+      db,
+      row.conversation_id,
+    );
     if (error) throw new Error(error.message);
 
     const credentials = await getInboxYCloudCredentials(
@@ -136,23 +139,20 @@ export async function applyResolvedText(
   if (row.body === null) return;
 
   if (resolved.body !== row.body) {
-    const { error } = await db
-      .from("messages")
-      .update({
-        body: resolved.body,
-        ...(resolved.templateName ? { template_name: resolved.templateName } : {}),
-      })
-      .eq("id", row.id)
-      .eq("body", row.body);
+    const { error } = await updateMessageBodyIfUnchanged(db, row.id, row.body, {
+      body: resolved.body,
+      ...(resolved.templateName ? { template_name: resolved.templateName } : {}),
+    });
     if (error) throw new Error(error.message);
   }
 
-  const { error: previewError } = await db
-    .from("conversations")
-    .update({ last_message_preview: resolved.body.slice(0, 200) })
-    .eq("id", row.conversation_id)
-    .eq("last_message_preview", row.body.slice(0, 200))
-    .lte("last_message_at", row.created_at);
+  const { error: previewError } = await updateConversationPreviewIfUnchanged(
+    db,
+    row.conversation_id,
+    resolved.body.slice(0, 200),
+    row.body.slice(0, 200),
+    row.created_at,
+  );
   if (previewError) throw new Error(previewError.message);
 }
 
@@ -172,13 +172,9 @@ export async function enrichMessageTextFromWebhook(
     .filter(Boolean);
   if (ids.length === 0) return;
 
-  const db = createAdminClient();
+  const db = getSystemDb();
   // Status webhooks repeat for every message; this check keeps them API-free.
-  const { data: rows, error } = await db
-    .from("messages")
-    .select(ENRICHABLE_MESSAGE_SELECT)
-    .in("ycloud_message_id", ids)
-    .limit(1);
+  const { data: rows, error } = await listEnrichableMessagesByYCloudIds(db, ids);
   if (error) throw new Error(error.message);
 
   const row = rows?.[0] as EnrichableMessage | undefined;

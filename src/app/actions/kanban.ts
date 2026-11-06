@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
 import { getAppSession } from "@/lib/rbac/session";
 import {
   loadKanbanColumnCards,
@@ -31,8 +31,8 @@ export async function loadMoreKanbanCards(input: {
     pageSize: clampPageSize(input.pageSize),
   };
 
-  const supabase = await createClient();
-  return loadKanbanColumnCards(supabase, {
+  const db = await getUserDb();
+  return loadKanbanColumnCards(db, {
     ...filters,
     tagId: input.tagId,
     offset: Math.max(0, input.offset),

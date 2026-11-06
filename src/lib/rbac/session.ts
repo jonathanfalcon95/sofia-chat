@@ -1,4 +1,6 @@
 import { cache } from "react";
+import { listActiveMembershipsForSession } from "@/lib/db/repos/memberships";
+import { getSessionProfile } from "@/lib/db/repos/profiles";
 import { createClient } from "@/lib/supabase/server";
 import type { PermissionCode } from "@/lib/rbac/permissions";
 
@@ -32,6 +34,17 @@ export function sessionShowsAssignedCompanies(session: AppSession) {
   return !sessionIsCompanyAdmin(session);
 }
 
+/**
+ * Who is signed in, without loading memberships. For hot read routes whose access RLS decides;
+ * use `getAppSession` to check permissions.
+ */
+export const getSessionUserId = cache(async (): Promise<string | null> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.getClaims();
+  const userId = data?.claims?.sub;
+  return error || !userId ? null : userId;
+});
+
 export const getAppSession = cache(async (): Promise<AppSession | null> => {
   const supabase = await createClient();
   const { data: claimsData, error: claimsError } =
@@ -39,32 +52,14 @@ export const getAppSession = cache(async (): Promise<AppSession | null> => {
   const userId = claimsData?.claims?.sub;
   if (claimsError || !userId) return null;
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id, email, full_name, is_platform_admin")
-    .eq("id", userId)
-    .single();
+  const { data: profile } = await getSessionProfile(supabase, userId);
 
   if (!profile) return null;
 
-  const { data: memberships } = await supabase
-    .from("company_memberships")
-    .select(
-      `
-      id,
-      company_id,
-      companies ( id, name ),
-      membership_roles (
-        roles (
-          name,
-          role_permissions ( permissions ( code ) )
-        )
-      ),
-      membership_inboxes ( inbox_id )
-    `,
-    )
-    .eq("user_id", userId)
-    .eq("is_active", true);
+  const { data: memberships } = await listActiveMembershipsForSession(
+    supabase,
+    userId,
+  );
 
   const mapped =
     memberships?.map((m) => {

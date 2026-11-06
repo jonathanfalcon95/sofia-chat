@@ -1,4 +1,5 @@
-import { createAdminClient, hasServiceRole } from "@/lib/supabase/admin";
+import { getSystemDb, hasServiceRole } from "@/lib/db/client";
+import { insertErrorLog } from "@/lib/db/repos/errors";
 
 export type ErrorLogLevel = "error" | "warn" | "fatal";
 
@@ -101,8 +102,8 @@ export async function logSystemError(input: LogSystemErrorInput) {
       console.error("[error_logs] missing service role", row);
       return;
     }
-    const admin = createAdminClient();
-    const { error } = await admin.from("error_logs").insert(row);
+    const admin = getSystemDb();
+    const { error } = await insertErrorLog(admin, row);
     if (error) {
       console.error("[error_logs] insert failed", error, row);
     }

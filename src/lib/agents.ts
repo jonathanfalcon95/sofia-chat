@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { getUserDb } from "@/lib/db/client";
+import { listActiveMembersByRoleName } from "@/lib/db/repos/memberships";
 
 export type CompanyAgent = {
   id: string;
@@ -11,26 +12,12 @@ export type CompanyAgent = {
 export async function listCompanyAgents(
   companyId?: string,
 ): Promise<CompanyAgent[]> {
-  const supabase = await createClient();
-  let query = supabase
-    .from("company_memberships")
-    .select(
-      `
-      company_id,
-      profiles ( id, full_name, email ),
-      membership_roles!inner (
-        roles!inner ( name )
-      )
-    `,
-    )
-    .eq("is_active", true)
-    .eq("membership_roles.roles.name", "Agente");
-
-  if (companyId) {
-    query = query.eq("company_id", companyId);
-  }
-
-  const { data, error } = await query;
+  const db = await getUserDb();
+  const { data, error } = await listActiveMembersByRoleName(
+    db,
+    "Agente",
+    companyId,
+  );
   if (error || !data) return [];
 
   const agents: CompanyAgent[] = [];
@@ -61,26 +48,12 @@ export async function listCompanyAgents(
 export async function listCompanySupportAgents(
   companyId?: string,
 ): Promise<CompanyAgent[]> {
-  const supabase = await createClient();
-  let query = supabase
-    .from("company_memberships")
-    .select(
-      `
-      company_id,
-      profiles ( id, full_name, email ),
-      membership_roles!inner (
-        roles!inner ( name )
-      )
-    `,
-    )
-    .eq("is_active", true)
-    .eq("membership_roles.roles.name", "Soporte");
-
-  if (companyId) {
-    query = query.eq("company_id", companyId);
-  }
-
-  const { data, error } = await query;
+  const db = await getUserDb();
+  const { data, error } = await listActiveMembersByRoleName(
+    db,
+    "Soporte",
+    companyId,
+  );
   if (error || !data) return [];
 
   const agents: CompanyAgent[] = [];

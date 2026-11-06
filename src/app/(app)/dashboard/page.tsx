@@ -1,5 +1,17 @@
-import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
+import { getSystemDb, getUserDb } from "@/lib/db/client";
+import {
+  countCompanies,
+  countContacts,
+  countConversationsInsideWindow,
+  countConversationsOutsideWindow,
+  countMessagesSince,
+  countOpenConversations,
+  countOpenConversationsInInbox,
+  countTicketsByStatus,
+  countUnassignedOpenConversations,
+  listDashboardInboxes,
+  listInboxNamesByIds,
+} from "@/lib/db/repos/dashboard";
 import {
   getAppSession,
   sessionCompanyIds,
@@ -30,7 +42,7 @@ const NO_VISIBILITY: InboxVisibility = {
 
 export default async function DashboardPage() {
   const session = await getAppSession();
-  const supabase = await createClient();
+  const supabase = await getUserDb();
   const showCompanies = session
     ? sessionShowsAssignedCompanies(session)
     : false;
@@ -41,19 +53,14 @@ export default async function DashboardPage() {
 
   // Counting thousands of rows under RLS timed out, and each timeout read as 0.
   // These queries return only totals and apply the same visibility rules here.
-  const admin = createAdminClient();
+  const admin = getSystemDb();
   const visibility = session ? inboxVisibility(session) : NO_VISIBILITY;
   const inboxFilter = visibility ? visibleInboxesFilter(visibility) : null;
 
   const { data: visibleInboxes } =
     visibility && !inboxFilter
       ? { data: [] as VisibleInbox[] }
-      : await (inboxFilter
-          ? admin
-              .from("inboxes")
-              .select("id, name, company_id, is_active")
-              .or(inboxFilter)
-          : admin.from("inboxes").select("id, name, company_id, is_active"));
+      : await listDashboardInboxes(admin, inboxFilter);
   const inboxRows = (visibleInboxes ?? []) as VisibleInbox[];
   const conversationInboxIds = inboxRows
     .filter(
@@ -65,28 +72,7 @@ export default async function DashboardPage() {
   const contactCompanyIds = session ? sessionCompanyIds(session) : [];
 
   // Filtered by inbox for everyone but platform admins (visibility === null).
-  const scopedToInboxes = <Q,>(query: Q): Q =>
-    visibility
-      ? (query as { in(column: string, values: string[]): Q }).in(
-          "inbox_id",
-          conversationInboxIds,
-        )
-      : query;
-  const countMessages = (direction: string) => {
-    const query = admin
-      .from("messages")
-      .select(visibility ? "id, conversations!inner(inbox_id)" : "id", {
-        count: "exact",
-        head: true,
-      })
-      .eq("direction", direction)
-      .gte("created_at", startOfDay.toISOString());
-    return visibility
-      ? query.in("conversations.inbox_id", conversationInboxIds)
-      : query;
-  };
-  const countConversations = () =>
-    admin.from("conversations").select("id", { count: "exact", head: true });
+  const scopedInboxIds = visibility ? conversationInboxIds : null;
 
   const [
     { count: companies },
@@ -100,41 +86,32 @@ export default async function DashboardPage() {
     { count: windowOpen },
     { count: windowClosed },
   ] = await Promise.all([
-    supabase.from("companies").select("*", { count: "exact", head: true }),
-    scopedToInboxes(countConversations().eq("status", "open")),
-    scopedToInboxes(
-      countConversations().eq("status", "open").is("assignee_id", null),
+    countCompanies(supabase),
+    countOpenConversations(admin, scopedInboxIds),
+    countUnassignedOpenConversations(admin, scopedInboxIds),
+    countTicketsByStatus(supabase, "open"),
+    countTicketsByStatus(supabase, "in_progress"),
+    countContacts(admin, contactCompanyIds),
+    countMessagesSince(
+      admin,
+      "inbound",
+      startOfDay.toISOString(),
+      scopedInboxIds,
     ),
-    supabase
-      .from("tickets")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "open"),
-    supabase
-      .from("tickets")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "in_progress"),
-    contactCompanyIds
-      ? admin
-          .from("contacts")
-          .select("id", { count: "exact", head: true })
-          .in("company_id", contactCompanyIds)
-      : admin.from("contacts").select("id", { count: "exact", head: true }),
-    countMessages("inbound"),
-    countMessages("outbound"),
-    scopedToInboxes(countConversations().gt("window_expires_at", nowIso)),
-    scopedToInboxes(
-      countConversations().or(
-        `window_expires_at.is.null,window_expires_at.lte.${nowIso}`,
-      ),
+    countMessagesSince(
+      admin,
+      "outbound",
+      startOfDay.toISOString(),
+      scopedInboxIds,
     ),
+    countConversationsInsideWindow(admin, nowIso, scopedInboxIds),
+    countConversationsOutsideWindow(admin, nowIso, scopedInboxIds),
   ]);
 
   const activeInboxes = inboxRows.filter((i) => i.is_active);
   const inboxCounts = await Promise.all(
     activeInboxes.map(async (inbox) => {
-      const { count } = await countConversations()
-        .eq("inbox_id", inbox.id)
-        .eq("status", "open");
+      const { count } = await countOpenConversationsInInbox(admin, inbox.id);
       return { name: inbox.name, value: count ?? UNAVAILABLE };
     }),
   );
@@ -166,7 +143,7 @@ export default async function DashboardPage() {
       new Set(session.memberships.flatMap((m) => m.inboxIds)),
     );
     const { data: inboxNameRows } = inboxIds.length
-      ? await supabase.from("inboxes").select("id, name").in("id", inboxIds)
+      ? await listInboxNamesByIds(supabase, inboxIds)
       : { data: [] as Array<{ id: string; name: string }> };
     const inboxNameMap = new Map(
       (inboxNameRows ?? []).map((i) => [i.id, i.name]),
