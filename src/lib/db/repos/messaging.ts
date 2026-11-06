@@ -1,3 +1,5 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/messaging";
 import type { Db } from "../types";
 
 export const ENRICHABLE_MESSAGE_SELECT =
@@ -8,6 +10,8 @@ export async function getConversationForSending(
   db: Db,
   conversationId: string,
 ) {
+  if (isSqlDb(db)) return sql.getConversationForSending(db, conversationId);
+
   return db
     .from("conversations")
     .select(
@@ -25,6 +29,8 @@ export async function getConversationForSofia(
   db: Db,
   conversationId: string,
 ) {
+  if (isSqlDb(db)) return sql.getConversationForSofia(db, conversationId);
+
   return db
     .from("conversations")
     .select(
@@ -40,6 +46,8 @@ export async function getConversationForSofia(
 
 /** Errors when the conversation doesn't exist; see findConversationInbox. */
 export async function getConversationInbox(db: Db, conversationId: string) {
+  if (isSqlDb(db)) return sql.getConversationInbox(db, conversationId);
+
   return db
     .from("conversations")
     .select("inbox_id")
@@ -48,6 +56,8 @@ export async function getConversationInbox(db: Db, conversationId: string) {
 }
 
 export async function findConversationInbox(db: Db, conversationId: string) {
+  if (isSqlDb(db)) return sql.findConversationInbox(db, conversationId);
+
   return db
     .from("conversations")
     .select("inbox_id")
@@ -56,10 +66,14 @@ export async function findConversationInbox(db: Db, conversationId: string) {
 }
 
 export async function findInboxId(db: Db, inboxId: string) {
+  if (isSqlDb(db)) return sql.findInboxId(db, inboxId);
+
   return db.from("inboxes").select("id").eq("id", inboxId).maybeSingle();
 }
 
 export async function findCompanyGuid(db: Db, companyId: string) {
+  if (isSqlDb(db)) return sql.findCompanyGuid(db, companyId);
+
   return db
     .from("companies")
     .select("guid_company")
@@ -69,6 +83,8 @@ export async function findCompanyGuid(db: Db, companyId: string) {
 
 /** Stores a message and returns the stored row. */
 export async function insertMessage(db: Db, row: Record<string, unknown>) {
+  if (isSqlDb(db)) return sql.insertMessage(db, row);
+
   return db.from("messages").insert(row).select("*").single();
 }
 
@@ -77,6 +93,8 @@ export async function updateConversationLastMessage(
   conversationId: string,
   patch: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.updateConversationLastMessage(db, conversationId, patch);
+
   return db.from("conversations").update(patch).eq("id", conversationId);
 }
 
@@ -85,6 +103,8 @@ export async function getMessageForReaction(
   messageId: string,
   conversationId: string,
 ) {
+  if (isSqlDb(db)) return sql.getMessageForReaction(db, messageId, conversationId);
+
   return db
     .from("messages")
     .select("id, wamid, ycloud_message_id, reactions")
@@ -98,6 +118,8 @@ export async function updateMessageReactions(
   messageId: string,
   reactions: unknown[],
 ) {
+  if (isSqlDb(db)) return sql.updateMessageReactions(db, messageId, reactions);
+
   return db
     .from("messages")
     .update({ reactions })
@@ -111,6 +133,8 @@ export async function updateMessagesMediaByYCloudIds(
   ycloudMessageIds: string[],
   patch: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.updateMessagesMediaByYCloudIds(db, ycloudMessageIds, patch);
+
   return db
     .from("messages")
     .update(patch)
@@ -121,6 +145,8 @@ export async function listEnrichableMessagesByYCloudIds(
   db: Db,
   ycloudMessageIds: string[],
 ) {
+  if (isSqlDb(db)) return sql.listEnrichableMessagesByYCloudIds(db, ycloudMessageIds);
+
   return db
     .from("messages")
     .select(ENRICHABLE_MESSAGE_SELECT)
@@ -135,6 +161,8 @@ export async function updateMessageBodyIfUnchanged(
   currentBody: string,
   patch: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.updateMessageBodyIfUnchanged(db, messageId, currentBody, patch);
+
   return db
     .from("messages")
     .update(patch)
@@ -150,6 +178,8 @@ export async function updateConversationPreviewIfUnchanged(
   currentPreview: string,
   messageCreatedAt: string,
 ) {
+  if (isSqlDb(db)) return sql.updateConversationPreviewIfUnchanged(db, conversationId, preview, currentPreview, messageCreatedAt);
+
   return db
     .from("conversations")
     .update({ last_message_preview: preview })

@@ -90,6 +90,21 @@ test("conversations need the inbox and conversations.view on its company", () =>
   assert.deepEqual(JSON.parse(clause.params[0] as string), ["in-a1"]);
 });
 
+test("messages and notes also need conversations.view, as their policies read conversations", () => {
+  const without = buildAccess({ ...base, permissions: [] });
+  assert.equal(scope.inbox(without, "c.inbox_id").text, "1 = 0");
+  assert.equal(hasInboxAccess(without, "in-a1"), false);
+  assert.deepEqual(without.inboxIds, ["in-a1"]);
+
+  const withView = buildAccess(base);
+  assert.equal(hasInboxAccess(withView, "in-a1"), true);
+});
+
+test("an anonymous caller compares nothing against a uuid column", () => {
+  const anonymous = buildAccess({ ...base, userId: "", memberships: [], permissions: [] });
+  assert.equal(scope.profilesRead(anonymous, "p.id").text, "1 = 0");
+});
+
 test("a user with no memberships matches nothing, never everything", () => {
   const access = buildAccess({
     ...base,

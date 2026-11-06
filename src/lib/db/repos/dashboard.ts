@@ -1,3 +1,5 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/dashboard";
 import type { Db } from "../types";
 
 /**
@@ -7,15 +9,21 @@ import type { Db } from "../types";
 
 /** `orFilter` is a visibleInboxesFilter() expression; null lists every inbox. */
 export async function listDashboardInboxes(db: Db, orFilter: string | null) {
+  if (isSqlDb(db)) return sql.listDashboardInboxes(db, orFilter);
+
   const query = db.from("inboxes").select("id, name, company_id, is_active");
   return orFilter ? query.or(orFilter) : query;
 }
 
 export async function listInboxNamesByIds(db: Db, inboxIds: string[]) {
+  if (isSqlDb(db)) return sql.listInboxNamesByIds(db, inboxIds);
+
   return db.from("inboxes").select("id, name").in("id", inboxIds);
 }
 
 export async function countCompanies(db: Db) {
+  if (isSqlDb(db)) return sql.countCompanies(db);
+
   return db.from("companies").select("*", { count: "exact", head: true });
 }
 
@@ -23,6 +31,8 @@ export async function countOpenConversations(
   db: Db,
   inboxIds: string[] | null,
 ) {
+  if (isSqlDb(db)) return sql.countOpenConversations(db, inboxIds);
+
   const query = db
     .from("conversations")
     .select("id", { count: "exact", head: true })
@@ -34,6 +44,8 @@ export async function countUnassignedOpenConversations(
   db: Db,
   inboxIds: string[] | null,
 ) {
+  if (isSqlDb(db)) return sql.countUnassignedOpenConversations(db, inboxIds);
+
   const query = db
     .from("conversations")
     .select("id", { count: "exact", head: true })
@@ -47,6 +59,8 @@ export async function countConversationsInsideWindow(
   nowIso: string,
   inboxIds: string[] | null,
 ) {
+  if (isSqlDb(db)) return sql.countConversationsInsideWindow(db, nowIso, inboxIds);
+
   const query = db
     .from("conversations")
     .select("id", { count: "exact", head: true })
@@ -59,6 +73,8 @@ export async function countConversationsOutsideWindow(
   nowIso: string,
   inboxIds: string[] | null,
 ) {
+  if (isSqlDb(db)) return sql.countConversationsOutsideWindow(db, nowIso, inboxIds);
+
   const query = db
     .from("conversations")
     .select("id", { count: "exact", head: true })
@@ -67,6 +83,8 @@ export async function countConversationsOutsideWindow(
 }
 
 export async function countOpenConversationsInInbox(db: Db, inboxId: string) {
+  if (isSqlDb(db)) return sql.countOpenConversationsInInbox(db, inboxId);
+
   return db
     .from("conversations")
     .select("id", { count: "exact", head: true })
@@ -75,6 +93,8 @@ export async function countOpenConversationsInInbox(db: Db, inboxId: string) {
 }
 
 export async function countTicketsByStatus(db: Db, status: string) {
+  if (isSqlDb(db)) return sql.countTicketsByStatus(db, status);
+
   return db
     .from("tickets")
     .select("*", { count: "exact", head: true })
@@ -83,6 +103,8 @@ export async function countTicketsByStatus(db: Db, status: string) {
 
 /** `companyIds` null counts every company's contacts; an empty list matches nothing. */
 export async function countContacts(db: Db, companyIds: string[] | null) {
+  if (isSqlDb(db)) return sql.countContacts(db, companyIds);
+
   const query = db
     .from("contacts")
     .select("id", { count: "exact", head: true });
@@ -95,6 +117,8 @@ export async function countMessagesSince(
   sinceIso: string,
   inboxIds: string[] | null,
 ) {
+  if (isSqlDb(db)) return sql.countMessagesSince(db, direction, sinceIso, inboxIds);
+
   const query = db
     .from("messages")
     .select(inboxIds ? "id, conversations!inner(inbox_id)" : "id", {

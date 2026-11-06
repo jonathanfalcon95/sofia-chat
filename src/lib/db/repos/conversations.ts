@@ -7,6 +7,8 @@ import {
   type PageCursor,
 } from "@/lib/conversations/page-cursor";
 import { ilikePattern } from "@/lib/pagination";
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/conversations";
 import type { Db } from "../types";
 
 export type ConversationPageFilters = {
@@ -25,6 +27,8 @@ export async function listConversationsPage(
   db: Db,
   filters: ConversationPageFilters,
 ) {
+  if (isSqlDb(db)) return sql.listConversationsPage(db, filters);
+
   let query = db
     .from("conversations")
     .select(CONVERSATION_LIST_SELECT)
@@ -56,6 +60,8 @@ export async function listConversationsPage(
 }
 
 export async function findConversationForList(db: Db, conversationId: string) {
+  if (isSqlDb(db)) return sql.findConversationForList(db, conversationId);
+
   return db
     .from("conversations")
     .select(CONVERSATION_LIST_SELECT)
@@ -70,6 +76,8 @@ export async function searchContactIdsByNameOrPhone(
   digits: string,
   companyId?: string,
 ) {
+  if (isSqlDb(db)) return sql.searchContactIdsByNameOrPhone(db, query, digits, companyId);
+
   const pattern = ilikePattern(query || digits);
   const orParts = [`name.ilike."${pattern}"`, `phone_number.ilike."${pattern}"`];
   if (digits && digits !== query) {
@@ -83,6 +91,8 @@ export async function searchContactIdsByNameOrPhone(
 }
 
 export async function listContactIdsByTag(db: Db, contactTagId: string) {
+  if (isSqlDb(db)) return sql.listContactIdsByTag(db, contactTagId);
+
   return db
     .from("contact_tags")
     .select("contact_id")
@@ -92,6 +102,8 @@ export async function listContactIdsByTag(db: Db, contactTagId: string) {
 
 /** No write (and no realtime event for every subscriber) when already read. */
 export async function markConversationRead(db: Db, conversationId: string) {
+  if (isSqlDb(db)) return sql.markConversationRead(db, conversationId);
+
   return db
     .from("conversations")
     .update({ unread_count: 0 })
@@ -100,6 +112,8 @@ export async function markConversationRead(db: Db, conversationId: string) {
 }
 
 export async function findConversationAssignee(db: Db, conversationId: string) {
+  if (isSqlDb(db)) return sql.findConversationAssignee(db, conversationId);
+
   return db
     .from("conversations")
     .select("assignee_id")
@@ -108,6 +122,8 @@ export async function findConversationAssignee(db: Db, conversationId: string) {
 }
 
 export async function listConversationsAssignedTo(db: Db, userId: string) {
+  if (isSqlDb(db)) return sql.listConversationsAssignedTo(db, userId);
+
   return db
     .from("conversations")
     .select("id, assignee_id")
@@ -116,6 +132,8 @@ export async function listConversationsAssignedTo(db: Db, userId: string) {
 }
 
 export async function getConversationCompany(db: Db, conversationId: string) {
+  if (isSqlDb(db)) return sql.getConversationCompany(db, conversationId);
+
   return db
     .from("conversations")
     .select("id, company_id")
@@ -128,6 +146,8 @@ export async function setConversationAssignee(
   conversationId: string,
   assigneeId: string | null,
 ) {
+  if (isSqlDb(db)) return sql.setConversationAssignee(db, conversationId, assigneeId);
+
   return db
     .from("conversations")
     .update({ assignee_id: assigneeId })
@@ -141,6 +161,8 @@ export async function findActiveMembershipWithRole(
   companyId: string,
   roleName: string,
 ) {
+  if (isSqlDb(db)) return sql.findActiveMembershipWithRole(db, userId, companyId, roleName);
+
   return db
     .from("company_memberships")
     .select(
@@ -162,6 +184,8 @@ export async function listConversationTagsWithKanbanFlag(
   db: Db,
   conversationId: string,
 ) {
+  if (isSqlDb(db)) return sql.listConversationTagsWithKanbanFlag(db, conversationId);
+
   return db
     .from("conversation_tags")
     .select("tag_id, tags!inner(is_kanban_column)")
@@ -173,6 +197,8 @@ export async function removeConversationTags(
   conversationId: string,
   tagIds: string[],
 ) {
+  if (isSqlDb(db)) return sql.removeConversationTags(db, conversationId, tagIds);
+
   return db
     .from("conversation_tags")
     .delete()
@@ -185,6 +211,8 @@ export async function addConversationTag(
   conversationId: string,
   tagId: string,
 ) {
+  if (isSqlDb(db)) return sql.addConversationTag(db, conversationId, tagId);
+
   return db.from("conversation_tags").insert({
     conversation_id: conversationId,
     tag_id: tagId,
@@ -192,6 +220,8 @@ export async function addConversationTag(
 }
 
 export async function findInboxForNewConversation(db: Db, inboxId: string) {
+  if (isSqlDb(db)) return sql.findInboxForNewConversation(db, inboxId);
+
   return db
     .from("inboxes")
     .select("id, company_id, phone_number")
@@ -203,6 +233,8 @@ export async function upsertContactByPhone(
   db: Db,
   contact: { companyId: string; phoneNumber: string; name: string },
 ) {
+  if (isSqlDb(db)) return sql.upsertContactByPhone(db, contact);
+
   return db
     .from("contacts")
     .upsert(
@@ -226,6 +258,8 @@ export async function upsertOpenConversation(
     assigneeId: string;
   },
 ) {
+  if (isSqlDb(db)) return sql.upsertOpenConversation(db, conversation);
+
   return db
     .from("conversations")
     .upsert(
@@ -243,10 +277,14 @@ export async function upsertOpenConversation(
 }
 
 export async function listCompaniesByName(db: Db) {
+  if (isSqlDb(db)) return sql.listCompaniesByName(db);
+
   return db.from("companies").select("id, name").order("name");
 }
 
 export async function listKanbanTagOptions(db: Db) {
+  if (isSqlDb(db)) return sql.listKanbanTagOptions(db);
+
   return db
     .from("tags")
     .select("id, name, color, company_id")
@@ -255,6 +293,8 @@ export async function listKanbanTagOptions(db: Db) {
 }
 
 export async function listContactTagOptions(db: Db) {
+  if (isSqlDb(db)) return sql.listContactTagOptions(db);
+
   return db
     .from("tags")
     .select("id, name, color, company_id")
@@ -263,6 +303,8 @@ export async function listContactTagOptions(db: Db) {
 }
 
 export async function findCompanyByGuid(db: Db, guid: string) {
+  if (isSqlDb(db)) return sql.findCompanyByGuid(db, guid);
+
   return db
     .from("companies")
     .select("id")
@@ -271,6 +313,8 @@ export async function findCompanyByGuid(db: Db, guid: string) {
 }
 
 export async function findCompanyById(db: Db, companyId: string) {
+  if (isSqlDb(db)) return sql.findCompanyById(db, companyId);
+
   return db.from("companies").select("id").eq("id", companyId).maybeSingle();
 }
 
@@ -279,6 +323,8 @@ export async function listContactsByPhoneNumbers(
   companyId: string,
   phoneNumbers: string[],
 ) {
+  if (isSqlDb(db)) return sql.listContactsByPhoneNumbers(db, companyId, phoneNumbers);
+
   return db
     .from("contacts")
     .select("id")
@@ -293,6 +339,8 @@ export async function listLatestConversationOfContacts(
   companyId: string,
   contactIds: string[],
 ) {
+  if (isSqlDb(db)) return sql.listLatestConversationOfContacts(db, companyId, contactIds);
+
   return db
     .from("conversations")
     .select("id")

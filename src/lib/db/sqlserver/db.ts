@@ -88,42 +88,48 @@ export type SqlResult<T> = {
   count: number | null;
 };
 
-export function failure(err: unknown): SqlResult<any> {
+export function failure(err: unknown): SqlResult<never> {
   const e = err as { message?: string; number?: number };
   return {
-    data: null,
+    data: null as never,
     error: { message: e?.message ?? "sql_error", code: e?.number ? String(e.number) : undefined },
     count: null,
   };
 }
 
+/**
+ * Repositories return this next to the Supabase chain's result. `never` drops out of that union,
+ * so callers keep the types inferred from the chain.
+ */
+type ChainShaped = SqlResult<never>;
+
 /** Like awaiting a PostgREST query: rows or `error`, never a thrown error. */
-export async function rows(work: () => Promise<Row[]>, count?: number | null): Promise<SqlResult<any>> {
+export async function rows(work: () => Promise<Row[]>, count?: number | null): Promise<ChainShaped> {
   try {
-    return { data: await work(), error: null, count: count ?? null };
+    return { data: (await work()) as never, error: null, count: count ?? null };
   } catch (err) {
     return failure(err);
   }
 }
 
 /** `.maybeSingle()`: null with no rows, an error with several. */
-export async function maybeOne(work: () => Promise<Row[]>): Promise<SqlResult<any>> {
+export async function maybeOne(work: () => Promise<Row[]>): Promise<ChainShaped> {
   try {
     const found = await work();
     if (found.length > 1) {
-      return { data: null, error: { message: "multiple_rows", code: "PGRST116" }, count: null };
+      return { data: null as never, error: { message: "multiple_rows", code: "PGRST116" }, count: null };
     }
-    return { data: found[0] ?? null, error: null, count: null };
+    return { data: (found[0] ?? null) as never, error: null, count: null };
   } catch (err) {
     return failure(err);
   }
 }
 
 /** `.single()`: an error unless there is exactly one row. */
-export async function one(work: () => Promise<Row[]>): Promise<SqlResult<any>> {
+export async function one(work: () => Promise<Row[]>): Promise<ChainShaped> {
   const result = await maybeOne(work);
   if (!result.error && !result.data) {
-    return { data: null, error: { message: "no_rows", code: "PGRST116" }, count: null };
+    return { data: null as never, error: { message: "no_rows", code: "PGRST116" }, count: null };
   }
   return result;
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Bell } from "lucide-react";
 import { toast } from "sonner";
+import { realtimeMode, subscribeRealtime } from "@/lib/realtime/client";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { sanitizeMessageBody } from "@/lib/ycloud/inbound-message-display";
@@ -108,9 +109,8 @@ export function NotificationBell({ userId }: { userId: string }) {
 
   useEffect(() => {
     if (!userId) return;
-    const supabase = createClient();
     let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let disconnect = () => {};
 
     const notifyInbound = async (
       conversationId: string,
@@ -151,11 +151,62 @@ export function NotificationBell({ userId }: { userId: string }) {
       });
     };
 
+    const handleConversationUpdate = (
+      row: {
+        id?: string;
+        assignee_id?: string | null;
+        last_message_preview?: string | null;
+      },
+      old?: { assignee_id?: string | null },
+    ) => {
+      if (!row?.id) return;
+
+      const prevAssignee =
+        old?.assignee_id ?? assigneeCache.current.get(row.id) ?? null;
+      assigneeCache.current.set(row.id, row.assignee_id ?? null);
+
+      if (row.assignee_id === userId && prevAssignee !== userId) {
+        push({
+          id: `assign-${row.id}-${Date.now()}`,
+          type: "assignment",
+          title: "Chat asignado",
+          body: row.last_message_preview
+            ? sanitizeMessageBody(row.last_message_preview)
+            : "Te asignaron una conversación",
+          conversationId: row.id,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    };
+
+    const handleNewMessage = async (msg: {
+      id?: string;
+      conversation_id?: string;
+      direction?: string;
+      body?: string | null;
+      created_at?: string;
+    }) => {
+      if (!msg?.id || !msg.conversation_id) return;
+      if (msg.direction !== "inbound") return;
+      await notifyInbound(msg.conversation_id, {
+        id: msg.id,
+        body: msg.body,
+        created_at: msg.created_at,
+        direction: msg.direction,
+      });
+    };
+
     void (async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const mode = await realtimeMode();
       if (cancelled) return;
-      if (sessionData.session?.access_token) {
-        supabase.realtime.setAuth(sessionData.session.access_token);
+
+      const supabase = mode === "supabase" ? createClient() : null;
+      if (supabase) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (cancelled) return;
+        if (sessionData.session?.access_token) {
+          supabase.realtime.setAuth(sessionData.session.access_token);
+        }
       }
 
       const convs = await fetchData<
@@ -166,69 +217,47 @@ export function NotificationBell({ userId }: { userId: string }) {
         assigneeCache.current.set(row.id, row.assignee_id ?? null);
       }
 
-      channel = supabase
+      if (!supabase) {
+        setLive(true);
+        disconnect = subscribeRealtime((signal) => {
+          if ("resync" in signal) return;
+          if (signal.table === "conversations") {
+            handleConversationUpdate(signal.row);
+          } else if (signal.eventType === "INSERT") {
+            void handleNewMessage(signal.row);
+          }
+        });
+        return;
+      }
+
+      const channel = supabase
         .channel(`sofia-notifications-${userId}`)
         .on(
           "postgres_changes",
           { event: "UPDATE", schema: "public", table: "conversations" },
-          (payload) => {
-            const row = payload.new as {
-              id?: string;
-              assignee_id?: string | null;
-              last_message_preview?: string | null;
-            };
-            const old = payload.old as {
-              assignee_id?: string | null;
-            };
-            if (!row?.id) return;
-
-            const prevAssignee =
-              old?.assignee_id ?? assigneeCache.current.get(row.id) ?? null;
-            assigneeCache.current.set(row.id, row.assignee_id ?? null);
-
-            if (row.assignee_id === userId && prevAssignee !== userId) {
-              push({
-                id: `assign-${row.id}-${Date.now()}`,
-                type: "assignment",
-                title: "Chat asignado",
-                body: row.last_message_preview
-                  ? sanitizeMessageBody(row.last_message_preview)
-                  : "Te asignaron una conversación",
-                conversationId: row.id,
-                createdAt: new Date().toISOString(),
-              });
-            }
-          },
+          (payload) =>
+            handleConversationUpdate(
+              payload.new as Parameters<typeof handleConversationUpdate>[0],
+              payload.old as { assignee_id?: string | null },
+            ),
         )
         .on(
           "postgres_changes",
           { event: "INSERT", schema: "public", table: "messages" },
-          async (payload) => {
-            const msg = payload.new as {
-              id?: string;
-              conversation_id?: string;
-              direction?: string;
-              body?: string | null;
-              created_at?: string;
-            };
-            if (!msg?.id || !msg.conversation_id) return;
-            if (msg.direction !== "inbound") return;
-            await notifyInbound(msg.conversation_id, {
-              id: msg.id,
-              body: msg.body,
-              created_at: msg.created_at,
-              direction: msg.direction,
-            });
-          },
+          (payload) =>
+            handleNewMessage(payload.new as Parameters<typeof handleNewMessage>[0]),
         )
         .subscribe((status) => {
           if (!cancelled) setLive(status === "SUBSCRIBED");
         });
+      disconnect = () => {
+        supabase.removeChannel(channel);
+      };
     })();
 
     return () => {
       cancelled = true;
-      if (channel) supabase.removeChannel(channel);
+      disconnect();
     };
   }, [userId, push]);
 

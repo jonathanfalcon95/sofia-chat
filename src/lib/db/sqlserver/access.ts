@@ -87,9 +87,15 @@ export function hasPermission(
   return Boolean(companyId && access.permissionsByCompany.get(companyId)?.has(permission));
 }
 
+/**
+ * May the user reach this inbox's conversations and what hangs from them? Stricter than the
+ * has_inbox_access helper on purpose: every policy on messages, notes and conversation_tags reads
+ * `conversations` under conversations_select, and writes need the row to be selectable too, so in
+ * Postgres they all also require conversations.view.
+ */
 export function hasInboxAccess(access: Access, inboxId: string | null | undefined) {
   if (access.isPlatformAdmin) return true;
-  return Boolean(inboxId && access.inboxIds.includes(inboxId));
+  return Boolean(inboxId && inboxesWithPermission(access, "conversations.view").includes(inboxId));
 }
 
 /** Companies where the user holds any of these permissions. */
@@ -107,6 +113,9 @@ export function inboxesWithPermission(access: Access, permission: string) {
   );
 }
 
+/** An anonymous caller has an empty user id, which SQL Server can't compare to a uuid column. */
+const UUID_SHAPE = /^[0-9a-f-]{36}$/i;
+
 function inList(column: string, ids: readonly string[]): SqlFragment {
   return ids.length ? sql`${raw(column)} IN ${uuidList(ids)}` : FALSE_SQL;
 }
@@ -122,9 +131,11 @@ export const scope = {
       ? TRUE_SQL
       : inList(column, companiesWithPermission(access, ...permissions));
   },
-  /** messages, conversation_notes, conversation_tags, and conversation writes. */
+  /** messages, conversation_notes, conversation_tags, and conversation writes. See hasInboxAccess. */
   inbox(access: Access, column: string): SqlFragment {
-    return access.isPlatformAdmin ? TRUE_SQL : inList(column, access.inboxIds);
+    return access.isPlatformAdmin
+      ? TRUE_SQL
+      : inList(column, inboxesWithPermission(access, "conversations.view"));
   },
   /** conversations_select: inbox access and conversations.view on its company. */
   conversationsRead(access: Access, inboxColumn: string): SqlFragment {
@@ -141,6 +152,7 @@ export const scope = {
   /** profiles_select: yourself, or anyone with an active membership in one of your companies. */
   profilesRead(access: Access, idColumn: string): SqlFragment {
     if (access.isPlatformAdmin) return TRUE_SQL;
+    if (!UUID_SHAPE.test(access.userId)) return FALSE_SQL;
     return sql`(${raw(idColumn)} = ${access.userId} OR EXISTS (
       SELECT 1 FROM chatbase.company_memberships m2
       WHERE m2.user_id = ${raw(idColumn)} AND m2.is_active = 1

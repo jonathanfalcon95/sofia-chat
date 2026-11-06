@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUserId } from "@/lib/auth/current-user";
+import { getUserDb } from "@/lib/db/client";
 import { findConversationInbox, findInboxId } from "@/lib/db/repos/messaging";
 import { listWhatsAppTemplates } from "@/lib/ycloud/client";
 import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 
 export async function GET(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabase = await getUserDb();
+  const userId = await getCurrentUserId();
+  const user = userId ? { id: userId } : null;
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

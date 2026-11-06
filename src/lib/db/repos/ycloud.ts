@@ -1,3 +1,6 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/ycloud";
+import * as webhook from "../sqlserver/webhook";
 import type { Db } from "../types";
 
 const ACCOUNT_SELECT =
@@ -7,6 +10,8 @@ const SYNCED_INBOX_SELECT =
   "id, phone_number, ycloud_phone_number_id, name, waba_id, ycloud_account_id";
 
 export async function listYCloudAccounts(db: Db) {
+  if (isSqlDb(db)) return sql.listYCloudAccounts(db);
+
   return db
     .from("ycloud_accounts")
     .select(ACCOUNT_SELECT)
@@ -14,6 +19,8 @@ export async function listYCloudAccounts(db: Db) {
 }
 
 export async function findYCloudAccount(db: Db, accountId: string) {
+  if (isSqlDb(db)) return sql.findYCloudAccount(db, accountId);
+
   return db
     .from("ycloud_accounts")
     .select(ACCOUNT_SELECT)
@@ -22,6 +29,8 @@ export async function findYCloudAccount(db: Db, accountId: string) {
 }
 
 export async function findYCloudAccountName(db: Db, accountId: string) {
+  if (isSqlDb(db)) return sql.findYCloudAccountName(db, accountId);
+
   return db
     .from("ycloud_accounts")
     .select("name")
@@ -35,6 +44,8 @@ export async function updateYCloudAccount(
   accountId: string,
   patch: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.updateYCloudAccount(db, accountId, patch);
+
   return db
     .from("ycloud_accounts")
     .update(patch)
@@ -47,6 +58,8 @@ export async function insertYCloudAccount(
   db: Db,
   row: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.insertYCloudAccount(db, row);
+
   return db
     .from("ycloud_accounts")
     .insert(row)
@@ -59,10 +72,14 @@ export async function saveYCloudAccountWebhook(
   accountId: string,
   patch: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.saveYCloudAccountWebhook(db, accountId, patch);
+
   return db.from("ycloud_accounts").update(patch).eq("id", accountId);
 }
 
 export async function findInboxForCredentials(db: Db, inboxId: string) {
+  if (isSqlDb(db)) return sql.findInboxForCredentials(db, inboxId);
+
   return db
     .from("inboxes")
     .select("id, phone_number, waba_id, ycloud_account_id")
@@ -75,6 +92,8 @@ export async function assignYCloudAccountToUnlinkedInboxes(
   db: Db,
   accountId: string,
 ) {
+  if (isSqlDb(db)) return sql.assignYCloudAccountToUnlinkedInboxes(db, accountId);
+
   return db
     .from("inboxes")
     .update({ ycloud_account_id: accountId })
@@ -82,6 +101,8 @@ export async function assignYCloudAccountToUnlinkedInboxes(
 }
 
 export async function listInboxesForPhoneSync(db: Db) {
+  if (isSqlDb(db)) return sql.listInboxesForPhoneSync(db);
+
   return db.from("inboxes").select(SYNCED_INBOX_SELECT);
 }
 
@@ -89,6 +110,8 @@ export async function insertSyncedInbox(
   db: Db,
   row: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.insertSyncedInbox(db, row);
+
   return db
     .from("inboxes")
     .insert(row)
@@ -101,6 +124,8 @@ export async function updateSyncedInbox(
   inboxId: string,
   patch: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.updateSyncedInbox(db, inboxId, patch);
+
   return db.from("inboxes").update(patch).eq("id", inboxId);
 }
 
@@ -114,6 +139,8 @@ export async function processYCloudWebhookForAccount(
     payload: Record<string, unknown>;
   },
 ) {
+  if (isSqlDb(db)) return webhook.processYCloudWebhookForAccount(db, args);
+
   return db.rpc("process_ycloud_webhook_for_account", {
     p_account_id: args.accountId,
     p_event_id: args.eventId,
@@ -132,6 +159,8 @@ export async function processYCloudWebhook(
     payload: Record<string, unknown>;
   },
 ) {
+  if (isSqlDb(db)) return webhook.processYCloudWebhook(db, args);
+
   return db.rpc("process_ycloud_webhook", {
     p_secret: args.secret,
     p_event_id: args.eventId,

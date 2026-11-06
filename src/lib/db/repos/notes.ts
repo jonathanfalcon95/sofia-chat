@@ -1,6 +1,10 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/notes";
 import type { Db } from "../types";
 
 export async function listConversationNotes(db: Db, conversationId: string) {
+  if (isSqlDb(db)) return sql.listConversationNotes(db, conversationId);
+
   return db
     .from("conversation_notes")
     .select("id, body, created_at, profiles(full_name, email)")
@@ -17,6 +21,8 @@ export async function insertConversationNote(
     body: string;
   },
 ) {
+  if (isSqlDb(db)) return sql.insertConversationNote(db, note);
+
   return db
     .from("conversation_notes")
     .insert({
@@ -34,6 +40,8 @@ export async function removeConversationNote(
   noteId: string,
   conversationId: string,
 ) {
+  if (isSqlDb(db)) return sql.removeConversationNote(db, noteId, conversationId);
+
   return db
     .from("conversation_notes")
     .delete()

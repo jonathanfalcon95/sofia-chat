@@ -1,3 +1,5 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/kanban";
 import type { Db } from "../types";
 
 const CARD_SELECT = `
@@ -47,6 +49,8 @@ export async function searchKanbanContactIds(
   companyId: string,
   pattern: string,
 ) {
+  if (isSqlDb(db)) return sql.searchKanbanContactIds(db, companyId, pattern);
+
   return db
     .from("contacts")
     .select("id")
@@ -62,6 +66,8 @@ export async function listTaggedConversationIds(
   from: number,
   to: number,
 ) {
+  if (isSqlDb(db)) return sql.listTaggedConversationIds(db, companyId, tagId, filters, from, to);
+
   return withFilters(
     db
       .from("conversations")
@@ -75,6 +81,8 @@ export async function listTaggedConversationIds(
 }
 
 export async function listKanbanColumnIds(db: Db, companyId: string) {
+  if (isSqlDb(db)) return sql.listKanbanColumnIds(db, companyId);
+
   return db
     .from("tags")
     .select("id")
@@ -91,6 +99,8 @@ export async function listUntaggedConversationIds(
   from: number,
   to: number,
 ) {
+  if (isSqlDb(db)) return sql.listUntaggedConversationIds(db, companyId, columnTagIds, filters, from, to);
+
   return withFilters(
     db
       .from("conversations")
@@ -105,6 +115,8 @@ export async function listUntaggedConversationIds(
 }
 
 export async function listKanbanCardRows(db: Db, conversationIds: string[]) {
+  if (isSqlDb(db)) return sql.listKanbanCardRows(db, conversationIds);
+
   return db
     .from("conversations")
     .select(CARD_SELECT)
@@ -113,12 +125,16 @@ export async function listKanbanCardRows(db: Db, conversationIds: string[]) {
 }
 
 export async function listKanbanInboxes(db: Db, companyId?: string) {
+  if (isSqlDb(db)) return sql.listKanbanInboxes(db, companyId);
+
   let inboxQuery = db.from("inboxes").select("id, name, company_id");
   if (companyId) inboxQuery = inboxQuery.eq("company_id", companyId);
   return inboxQuery;
 }
 
 export async function listKanbanColumns(db: Db, companyId?: string) {
+  if (isSqlDb(db)) return sql.listKanbanColumns(db, companyId);
+
   let tagsQuery = db
     .from("tags")
     .select("id, name, color, position, company_id")

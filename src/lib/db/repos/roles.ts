@@ -1,7 +1,11 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/roles";
 import type { Db } from "../types";
 
 /** Roles with no company: the templates copied into every new company. */
 export async function listTemplateRolesWithPermissions(db: Db) {
+  if (isSqlDb(db)) return sql.listTemplateRolesWithPermissions(db);
+
   return db
     .from("roles")
     .select("id, name, description, role_permissions(permission_id)")
@@ -17,6 +21,8 @@ export async function insertRole(
     is_system: boolean;
   },
 ) {
+  if (isSqlDb(db)) return sql.insertRole(db, values);
+
   return db.from("roles").insert(values).select("id").single();
 }
 
@@ -26,6 +32,8 @@ export async function updateCompanyRole(
   companyId: string,
   values: { name: string; description: string | null },
 ) {
+  if (isSqlDb(db)) return sql.updateCompanyRole(db, id, companyId, values);
+
   return db
     .from("roles")
     .update(values)
@@ -38,6 +46,8 @@ export async function findCompanyRole(
   roleId: string,
   companyId: string,
 ) {
+  if (isSqlDb(db)) return sql.findCompanyRole(db, roleId, companyId);
+
   return db
     .from("roles")
     .select("id")
@@ -48,6 +58,8 @@ export async function findCompanyRole(
 
 /** Every role that belongs to a company (templates excluded). */
 export async function listCompanyRoles(db: Db) {
+  if (isSqlDb(db)) return sql.listCompanyRoles(db);
+
   return db
     .from("roles")
     .select("id, name, company_id")
@@ -64,6 +76,8 @@ export async function listCompanyRolesPage(
     to: number;
   },
 ) {
+  if (isSqlDb(db)) return sql.listCompanyRolesPage(db, filters);
+
   let query = db
     .from("roles")
     .select(
@@ -80,10 +94,14 @@ export async function listCompanyRolesPage(
 }
 
 export async function listPermissions(db: Db) {
+  if (isSqlDb(db)) return sql.listPermissions(db);
+
   return db.from("permissions").select("code, description").order("code");
 }
 
 export async function listPermissionsByCodes(db: Db, codes: string[]) {
+  if (isSqlDb(db)) return sql.listPermissionsByCodes(db, codes);
+
   return db.from("permissions").select("id, code").in("code", codes);
 }
 
@@ -91,10 +109,14 @@ export async function insertRolePermissionRows(
   db: Db,
   rows: Array<{ role_id: string; permission_id: string }>,
 ) {
+  if (isSqlDb(db)) return sql.insertRolePermissionRows(db, rows);
+
   return db.from("role_permissions").insert(rows);
 }
 
 export async function listRolePermissionCodes(db: Db, roleId: string) {
+  if (isSqlDb(db)) return sql.listRolePermissionCodes(db, roleId);
+
   return db
     .from("role_permissions")
     .select("permissions(code)")
@@ -102,6 +124,8 @@ export async function listRolePermissionCodes(db: Db, roleId: string) {
 }
 
 export async function listRolePermissionRows(db: Db, roleId: string) {
+  if (isSqlDb(db)) return sql.listRolePermissionRows(db, roleId);
+
   return db
     .from("role_permissions")
     .select("id, permissions(code)")
@@ -109,9 +133,13 @@ export async function listRolePermissionRows(db: Db, roleId: string) {
 }
 
 export async function deleteRolePermissionsByRole(db: Db, roleId: string) {
+  if (isSqlDb(db)) return sql.deleteRolePermissionsByRole(db, roleId);
+
   return db.from("role_permissions").delete().eq("role_id", roleId);
 }
 
 export async function deleteRolePermissionsByIds(db: Db, ids: string[]) {
+  if (isSqlDb(db)) return sql.deleteRolePermissionsByIds(db, ids);
+
   return db.from("role_permissions").delete().in("id", ids);
 }

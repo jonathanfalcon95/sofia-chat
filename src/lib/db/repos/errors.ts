@@ -1,7 +1,11 @@
 import { ilikePattern } from "@/lib/pagination";
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/errors";
 import type { Db } from "../types";
 
 export async function insertErrorLog(db: Db, row: Record<string, unknown>) {
+  if (isSqlDb(db)) return sql.insertErrorLog(db, row);
+
   return db.from("error_logs").insert(row);
 }
 
@@ -10,10 +14,14 @@ export async function updateErrorLog(
   id: string,
   patch: Record<string, unknown>,
 ) {
+  if (isSqlDb(db)) return sql.updateErrorLog(db, id, patch);
+
   return db.from("error_logs").update(patch).eq("id", id);
 }
 
 export async function listCompaniesForErrorLogFilter(db: Db) {
+  if (isSqlDb(db)) return sql.listCompaniesForErrorLogFilter(db);
+
   return db
     .from("companies")
     .select("id, name")
@@ -21,6 +29,8 @@ export async function listCompaniesForErrorLogFilter(db: Db) {
 }
 
 export async function listErrorLogSources(db: Db) {
+  if (isSqlDb(db)) return sql.listErrorLogSources(db);
+
   return db.from("error_logs").select("source").limit(1000);
 }
 
@@ -40,6 +50,8 @@ export async function listErrorLogsPage(
     to: number;
   },
 ) {
+  if (isSqlDb(db)) return sql.listErrorLogsPage(db, args);
+
   const { companyId, status, level, source, q, from, to } = args;
 
   let query = db

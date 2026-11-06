@@ -62,6 +62,7 @@ export async function updateSession(request: NextRequest) {
   const isPublic =
     isAuthPage ||
     path.startsWith("/api/webhooks") ||
+    path.startsWith("/api/auth") ||
     path.startsWith("/auth");
 
   if (!userId && !isPublic) {

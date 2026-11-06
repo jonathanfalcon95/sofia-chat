@@ -3,6 +3,9 @@
 //   node scripts/migrate/load-from-supabase.mjs preflight
 //   node scripts/migrate/load-from-supabase.mjs apply-ddl --confirm <database>
 //   node scripts/migrate/load-from-supabase.mjs load --confirm <database> [--months 2]
+//   node scripts/migrate/load-from-supabase.mjs wipe --confirm <database>
+//   node scripts/migrate/load-from-supabase.mjs apply-file --file 00x_nombre.sql --confirm <database>
+//   node scripts/migrate/load-from-supabase.mjs grant-app --confirm <database>
 //
 // Reads DATABASE_URL (Postgres connection), SQL_SERVER, SQL_DB and AZ_SUBSCRIPTION from the
 // environment and signs in to SQL with the az CLI token. Supabase is only ever read, inside one
@@ -324,9 +327,49 @@ async function load() {
   sql.close();
 }
 
-const commands = { preflight, "apply-ddl": applyDdl, load };
+/** Empties chatbase so `load` can run again. Only ever touches this schema. */
+async function wipe() {
+  if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
+  const sql = await sqlConnect();
+  for (const table of [...TABLES].reverse()) {
+    await sqlRun(sql, `DELETE FROM chatbase.${table.name}`);
+    log(`vaciada ${table.name}`);
+  }
+  await sqlRun(sql, "DELETE FROM chatbase.webhook_events");
+  await sqlRun(sql, "DELETE FROM chatbase.webhook_inbox");
+  sql.close();
+}
+
+/** Applies one file from db/sqlserver, batch by batch. */
+async function applyFile() {
+  if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
+  const file = option("file");
+  if (!file || !/^\d{3}_[a-z_]+\.sql$/.test(file)) throw new Error("Usa --file 00x_nombre.sql");
+  const sql = await sqlConnect();
+  const batches = readFileSync(new URL(`../../db/sqlserver/${file}`, import.meta.url), "utf8").split(/^\s*GO\s*$/m).map((b) => b.trim()).filter(Boolean);
+  for (const batch of batches) await sqlRun(sql, batch);
+  log(`aplicado ${file}: ${batches.length} lotes`);
+  sql.close();
+}
+
+/** Creates or updates the app's user, limited to this schema. The password comes from APP_PASSWORD. */
+async function grantApp() {
+  if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
+  const password = required("APP_PASSWORD").replace(/'/g, "''");
+  const sql = await sqlConnect();
+  await sqlRun(sql, `
+    IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'chatbase_app')
+      CREATE USER chatbase_app WITH PASSWORD = '${password}', DEFAULT_SCHEMA = chatbase;
+    ELSE
+      ALTER USER chatbase_app WITH PASSWORD = '${password}';
+    GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::chatbase TO chatbase_app;`);
+  log("usuario de la app listo");
+  sql.close();
+}
+
+const commands = { preflight, "apply-ddl": applyDdl, load, wipe, "apply-file": applyFile, "grant-app": grantApp };
 if (!commands[command]) {
-  console.error("Comandos: preflight | apply-ddl | load");
+  console.error("Comandos: preflight | apply-ddl | load | wipe | apply-file | grant-app");
   process.exit(2);
 }
 try {

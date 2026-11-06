@@ -33,6 +33,8 @@ export async function listActiveMembersByRoleName(
 
 /** A user's active memberships with the company, roles, permissions and inboxes the session needs. */
 export async function listActiveMembershipsForSession(db: Db, userId: string) {
+  if (isSqlDb(db)) return sql.listActiveMembershipsForSession(db, userId);
+
   return db
     .from("company_memberships")
     .select(
@@ -65,6 +67,8 @@ export async function listMembershipsPage(
     to: number;
   },
 ) {
+  if (isSqlDb(db)) return sql.listMembershipsPage(db, filters);
+
   let query = db
     .from("company_memberships")
     .select(
@@ -88,6 +92,8 @@ export async function listMembershipsPage(
 }
 
 export async function listCompanyMembershipIds(db: Db, companyId: string) {
+  if (isSqlDb(db)) return sql.listCompanyMembershipIds(db, companyId);
+
   return db
     .from("company_memberships")
     .select("id")
@@ -101,6 +107,8 @@ export async function findCompanyMembership(
   companyId: string,
   userId: string,
 ) {
+  if (isSqlDb(db)) return sql.findCompanyMembership(db, membershipId, companyId, userId);
+
   return db
     .from("company_memberships")
     .select("id")
@@ -114,6 +122,8 @@ export async function insertMembership(
   db: Db,
   values: { company_id: string; user_id: string; is_active: boolean },
 ) {
+  if (isSqlDb(db)) return sql.insertMembership(db, values);
+
   return db
     .from("company_memberships")
     .insert(values)
@@ -126,6 +136,8 @@ export async function updateMembershipActive(
   membershipId: string,
   isActive: boolean,
 ) {
+  if (isSqlDb(db)) return sql.updateMembershipActive(db, membershipId, isActive);
+
   return db
     .from("company_memberships")
     .update({ is_active: isActive })
@@ -133,6 +145,8 @@ export async function updateMembershipActive(
 }
 
 export async function listMembershipIdsByRole(db: Db, roleId: string) {
+  if (isSqlDb(db)) return sql.listMembershipIdsByRole(db, roleId);
+
   return db
     .from("membership_roles")
     .select("membership_id")
@@ -140,6 +154,8 @@ export async function listMembershipIdsByRole(db: Db, roleId: string) {
 }
 
 export async function deleteMembershipRoles(db: Db, membershipId: string) {
+  if (isSqlDb(db)) return sql.deleteMembershipRoles(db, membershipId);
+
   return db
     .from("membership_roles")
     .delete()
@@ -150,10 +166,14 @@ export async function insertMembershipRole(
   db: Db,
   values: { membership_id: string; role_id: string },
 ) {
+  if (isSqlDb(db)) return sql.insertMembershipRole(db, values);
+
   return db.from("membership_roles").insert(values);
 }
 
 export async function deleteMembershipInboxes(db: Db, membershipId: string) {
+  if (isSqlDb(db)) return sql.deleteMembershipInboxes(db, membershipId);
+
   return db
     .from("membership_inboxes")
     .delete()
@@ -166,6 +186,8 @@ export async function deleteMembershipInboxLinks(
   membershipIds: string[],
   inboxIds: string[],
 ) {
+  if (isSqlDb(db)) return sql.deleteMembershipInboxLinks(db, membershipIds, inboxIds);
+
   return db
     .from("membership_inboxes")
     .delete()
@@ -177,5 +199,7 @@ export async function insertMembershipInboxes(
   db: Db,
   rows: Array<{ membership_id: string; inbox_id: string }>,
 ) {
+  if (isSqlDb(db)) return sql.insertMembershipInboxes(db, rows);
+
   return db.from("membership_inboxes").insert(rows);
 }
