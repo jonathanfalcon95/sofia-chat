@@ -1,6 +1,8 @@
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
   getAppSession,
+  sessionCompanyIds,
   sessionHasAnyPermission,
 } from "@/lib/rbac/session";
 import { ContactsManager } from "@/components/contacts/contacts-manager";
@@ -65,7 +67,28 @@ export default async function ContactsPage({
     }
   }
 
-  let query = supabase
+  // Sorting and counting a company's contacts under RLS takes seconds. Pick the
+  // page by id within the user's companies; the details below still go through
+  // RLS, so nothing beyond the total is read on the user's behalf.
+  const scopedCompanyIds = session ? sessionCompanyIds(session) : [];
+  let idsQuery = createAdminClient()
+    .from("contacts")
+    .select("id", { count: "exact" })
+    .order("created_at", { ascending: false });
+  if (scopedCompanyIds) idsQuery = idsQuery.in("company_id", scopedCompanyIds);
+  if (companyId) idsQuery = idsQuery.eq("company_id", companyId);
+  if (contactIdsByTag) idsQuery = idsQuery.in("id", contactIdsByTag);
+  if (q) {
+    const pattern = ilikePattern(q);
+    idsQuery = idsQuery.or(
+      `name.ilike."${pattern}",phone_number.ilike."${pattern}"`,
+    );
+  }
+
+  const { data: idRows, count, error: idsError } = await idsQuery.range(from, to);
+  if (idsError) throw new Error(`Contacts page: ${idsError.message}`);
+
+  const { data: contacts, error: contactsError } = await supabase
     .from("contacts")
     .select(
       `
@@ -73,18 +96,13 @@ export default async function ContactsPage({
       companies(name),
       contact_tags ( tag_id, tags ( id, name, color, is_kanban_column ) )
     `,
-      { count: "exact" },
+    )
+    .in(
+      "id",
+      (idRows ?? []).map((row) => row.id as string),
     )
     .order("created_at", { ascending: false });
-
-  if (companyId) query = query.eq("company_id", companyId);
-  if (contactIdsByTag) query = query.in("id", contactIdsByTag);
-  if (q) {
-    const pattern = ilikePattern(q);
-    query = query.or(`name.ilike."${pattern}",phone_number.ilike."${pattern}"`);
-  }
-
-  const { data: contacts, count } = await query.range(from, to);
+  if (contactsError) throw new Error(`Contacts page: ${contactsError.message}`);
 
   const normalized =
     contacts?.map((c) => ({

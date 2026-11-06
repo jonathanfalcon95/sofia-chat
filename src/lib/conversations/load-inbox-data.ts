@@ -12,57 +12,69 @@ import {
 } from "./fetch-conversation-list";
 import {
   INBOX_COMPANY_COOKIE,
-  pickPreferredCompanyId,
+  resolveInitialCompanyId,
 } from "./inbox-company-preference";
 
 export type InboxCompany = { id: string; name: string };
+
+async function loadInitialListPage(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  companyId: string,
+) {
+  try {
+    const page = await fetchConversationListPage(supabase, { companyId });
+    return { ...page, failed: false };
+  } catch (err) {
+    console.error("[inbox] conversation list bootstrap failed", err);
+    return { conversations: [] as ConversationRow[], hasMore: false, failed: true };
+  }
+}
 
 export async function loadInboxListData() {
   const startedAt = nowMs();
   const supabase = await createClient();
   const conversationQueryStartedAt = nowMs();
 
-  const [session, { data: companies }, cookieStore] = await Promise.all([
-    getAppSession(),
-    supabase.from("companies").select("id, name").order("name"),
-    cookies(),
-  ]);
+  const [session, { data: companies, error: companiesError }, cookieStore] =
+    await Promise.all([
+      getAppSession(),
+      supabase.from("companies").select("id, name").order("name"),
+      cookies(),
+    ]);
+
+  if (companiesError) {
+    console.error("[inbox] companies query failed", companiesError);
+  }
 
   const companyList = (companies ?? []) as InboxCompany[];
   const showCompanyFilter =
     Boolean(session?.isPlatformAdmin) || companyList.length > 1;
-  const preferredCompanyId = pickPreferredCompanyId(
+  const initialCompanyId = resolveInitialCompanyId(
     companyList,
     cookieStore.get(INBOX_COMPANY_COOKIE)?.value,
   );
-  const initialCompanyId = showCompanyFilter
-    ? (preferredCompanyId ?? companyList[0]?.id ?? "")
-    : "";
 
-  let listPage = { conversations: [] as ConversationRow[], hasMore: false };
-  if (!(showCompanyFilter && !initialCompanyId)) {
-    try {
-      listPage = await fetchConversationListPage(supabase, {
-        companyId: initialCompanyId || undefined,
-      });
-    } catch (err) {
-      console.error("[inbox] conversation list bootstrap failed", err);
-    }
-  }
-
-  const [agents, { data: tags }, { data: contactTags }] = await Promise.all([
-    listCompanyAgents(),
-    supabase
-      .from("tags")
-      .select("id, name, color, company_id")
-      .eq("is_kanban_column", true)
-      .order("position"),
-    supabase
-      .from("tags")
-      .select("id, name, color, company_id")
-      .eq("is_kanban_column", false)
-      .order("name"),
-  ]);
+  const [listPage, agents, { data: tags }, { data: contactTags }] =
+    await Promise.all([
+      initialCompanyId
+        ? loadInitialListPage(supabase, initialCompanyId)
+        : Promise.resolve({
+            conversations: [] as ConversationRow[],
+            hasMore: false,
+            failed: false,
+          }),
+      listCompanyAgents(),
+      supabase
+        .from("tags")
+        .select("id, name, color, company_id")
+        .eq("is_kanban_column", true)
+        .order("position"),
+      supabase
+        .from("tags")
+        .select("id, name, color, company_id")
+        .eq("is_kanban_column", false)
+        .order("name"),
+    ]);
 
   reportServerDuration("list_query", conversationQueryStartedAt, {
     rows: listPage.conversations.length,
@@ -84,6 +96,7 @@ export async function loadInboxListData() {
     companies: companyList,
     initialCompanyId,
     showCompanyFilter,
+    listLoadFailed: listPage.failed || Boolean(companiesError),
   };
 }
 
@@ -112,12 +125,18 @@ export async function loadConversationDetailData(
         .order("created_at", { ascending: false })
     : Promise.resolve({ data: [] as Array<Record<string, unknown>> });
 
-  const [{ data: messageRows }, { data: noteRows }, conversation] =
-    await Promise.all([
-      messagesQuery,
-      notesQuery,
-      fetchConversationById(supabase, conversationId),
-    ]);
+  const [
+    { data: messageRows, error: messagesError },
+    { data: noteRows },
+    conversation,
+  ] = await Promise.all([
+    messagesQuery,
+    notesQuery,
+    fetchConversationById(supabase, conversationId),
+  ]);
+  if (messagesError) {
+    throw new Error(`Conversation messages: ${messagesError.message}`);
+  }
   reportServerDuration("detail_messages_query", messagesStartedAt, {
     conversationId,
     rows: messageRows?.length ?? 0,

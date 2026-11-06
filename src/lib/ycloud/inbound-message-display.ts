@@ -12,6 +12,17 @@ function asStr(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+/** What the customer tapped: a template quick reply or an interactive reply. */
+export function extractReplyText(raw: Json): string | null {
+  const buttonText = asStr(asObj(raw?.button)?.text);
+  if (buttonText) return buttonText;
+  const interactive = asObj(raw?.interactive);
+  return (
+    asStr(asObj(interactive?.button_reply)?.title) ||
+    asStr(asObj(interactive?.list_reply)?.title)
+  );
+}
+
 export function formatInteractiveCta(raw: Json): string {
   const interactive = asObj(raw?.interactive);
   if (!interactive) return "Mensaje interactivo";
@@ -134,6 +145,8 @@ export const PLACEHOLDER_LABELS: Record<string, string> = {
   template: "Plantilla",
   reaction: "Reacción",
   unsupported: "Mensaje no disponible",
+  revoke: "Mensaje eliminado",
+  edit: "Mensaje editado",
 };
 
 export function sanitizeMessageBody(

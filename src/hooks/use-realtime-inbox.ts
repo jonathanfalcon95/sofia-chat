@@ -107,7 +107,12 @@ export function useRealtimeInbox({
       )
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          ...(companyId ? { filter: `company_id=eq.${companyId}` } : {}),
+        },
         (payload) => {
           const msg = payload.new as MessageRow;
           if (!msg?.conversation_id) return;

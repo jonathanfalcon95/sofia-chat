@@ -36,6 +36,7 @@ export type ConversationListPage = {
 async function resolveSearchContactIds(
   supabase: SupabaseClient,
   phoneSearch: string,
+  companyId?: string,
 ): Promise<{ contactIds: string[] | null; empty: boolean }> {
   const query = phoneSearch.trim().toLowerCase();
   const digits = phoneSearch.replace(/\D/g, "");
@@ -47,11 +48,13 @@ async function resolveSearchContactIds(
     orParts.push(`phone_number.ilike."%${digits.replace(/[%_,."'\\()]/g, "")}%"`);
   }
 
-  const { data, error } = await supabase
+  let contactsQuery = supabase
     .from("contacts")
     .select("id")
-    .or(orParts.join(","))
-    .limit(500);
+    .or(orParts.join(","));
+  if (companyId) contactsQuery = contactsQuery.eq("company_id", companyId);
+
+  const { data, error } = await contactsQuery.limit(500);
   if (error) throw new Error(`Conversation search: ${error.message}`);
   const contactIds = (data ?? []).map((c) => c.id as string);
   return { contactIds, empty: contactIds.length === 0 };
@@ -94,6 +97,7 @@ export async function fetchConversationListPage(
     const searched = await resolveSearchContactIds(
       supabase,
       filters.phoneSearch,
+      filters.companyId,
     );
     if (searched.empty) return { conversations: [], hasMore: false };
     if (searched.contactIds) {
@@ -156,6 +160,7 @@ export {
   upsertConversationInList,
 };
 
+/** Null means no such row (or no access); a failed query throws instead. */
 export async function fetchConversationById(
   supabase: SupabaseClient,
   conversationId: string,
@@ -166,7 +171,8 @@ export async function fetchConversationById(
     .select(CONVERSATION_LIST_SELECT)
     .eq("id", conversationId)
     .maybeSingle();
-  if (error || !data) return null;
+  if (error) throw new Error(`Conversation detail: ${error.message}`);
+  if (!data) return null;
   return (
     normalizeConversations([data as Record<string, unknown>])[0] ?? null
   );

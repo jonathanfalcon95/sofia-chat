@@ -42,6 +42,35 @@ export function formatDayChip(date: Date, referenceDate = new Date()): string {
   return formatted.charAt(0).toUpperCase() + formatted.slice(1);
 }
 
+/** WhatsApp-style list time: 14:32, Ayer, lunes, 05/11/26. */
+export function formatChatListTime(
+  date: Date,
+  referenceDate = new Date(),
+): string {
+  const startOfDay = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const diffDays = Math.round(
+    (startOfDay(referenceDate) - startOfDay(date)) / msPerDay,
+  );
+
+  if (diffDays <= 0) {
+    return new Intl.DateTimeFormat("es", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  }
+  if (diffDays === 1) return "Ayer";
+  if (diffDays < 7) {
+    return new Intl.DateTimeFormat("es", { weekday: "long" }).format(date);
+  }
+  return new Intl.DateTimeFormat("es", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  }).format(date);
+}
+
 export type DayGroup = {
   dayKey: string;
   dayLabel: string;

@@ -8,6 +8,9 @@ import { mediaContentDisposition } from "@/lib/ycloud/inbound-message-display";
 
 export const runtime = "nodejs";
 
+/** A message's media never changes, and each view otherwise re-downloads it. */
+const MEDIA_CACHE_CONTROL = "private, max-age=604800, immutable";
+
 function parseStorageRef(mediaUrl: string): { bucket: string; path: string } | null {
   if (!mediaUrl.startsWith("storage:")) return null;
   const rest = mediaUrl.slice("storage:".length);
@@ -30,10 +33,9 @@ export async function GET(
     new URL(request.url).searchParams.get("attachment") === "1";
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  // Verified locally: getUser() added a round trip to Auth for every image.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  if (!claimsData?.claims?.sub) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -89,7 +91,7 @@ export async function GET(
         status: 200,
         headers: {
           "Content-Type": message.media_mime || file.type || mimeHint,
-          "Cache-Control": "private, max-age=300",
+          "Cache-Control": MEDIA_CACHE_CONTROL,
           "Content-Length": String(buf.byteLength),
           "Content-Disposition": disposition,
         },
@@ -127,7 +129,7 @@ export async function GET(
       status: 200,
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "private, max-age=300",
+        "Cache-Control": MEDIA_CACHE_CONTROL,
         "Content-Disposition": disposition,
         ...(contentLength
           ? { "Content-Length": String(contentLength) }

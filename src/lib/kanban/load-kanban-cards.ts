@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { clampPageSize, ilikePattern } from "@/lib/pagination";
+import { createAdminClient } from "@/lib/supabase/admin";
+
+type AdminClient = ReturnType<typeof createAdminClient>;
 
 export type KanbanCard = {
   id: string;
@@ -71,15 +74,28 @@ function dedupeByContact(cards: KanbanCard[]): KanbanCard[] {
   return out;
 }
 
+const CARD_SELECT = `
+  id, last_message_preview, last_message_at, inbox_id, company_id, contact_id, assignee_id,
+  contacts ( id, name, phone_number ),
+  inboxes ( name )
+`;
+
+type FilterableQuery<Q> = {
+  eq(column: string, value: string): Q;
+  is(column: string, value: null): Q;
+  or(filters: string): Q;
+  ilike(column: string, pattern: string): Q;
+};
+
 async function resolveSearchContactIds(
-  supabase: SupabaseClient,
+  admin: AdminClient,
   companyId: string,
   q: string,
 ): Promise<string[] | null> {
   const search = q.trim();
   if (!search) return null;
   const pattern = ilikePattern(search);
-  const { data: contacts, error } = await supabase
+  const { data: contacts, error } = await admin
     .from("contacts")
     .select("id")
     .eq("company_id", companyId)
@@ -88,6 +104,11 @@ async function resolveSearchContactIds(
   return (contacts ?? []).map((c) => c.id as string);
 }
 
+/**
+ * Column lookups run with the service role and only ever yield ids: with RLS a
+ * column scanned thousands of rows and hit the 8s timeout. The cards themselves
+ * are then read with the user's client, so RLS still decides what they can see.
+ */
 export async function loadKanbanColumnCards(
   supabase: SupabaseClient,
   filters: KanbanLoadFilters & {
@@ -103,8 +124,9 @@ export async function loadKanbanColumnCards(
   const from = offset;
   const to = offset + fetchSize - 1;
 
+  const admin = createAdminClient();
   const searchContactIds = await resolveSearchContactIds(
-    supabase,
+    admin,
     filters.companyId,
     filters.q ?? "",
   );
@@ -112,135 +134,85 @@ export async function loadKanbanColumnCards(
     ? ilikePattern(filters.q!.trim())
     : null;
 
-  // Step 1: conversation ids for this kanban column
-  const { data: tagLinks, error: tagErr } = await supabase
-    .from("conversation_tags")
-    .select("conversation_id")
-    .eq("tag_id", filters.tagId)
-    .range(0, Math.max(to + 200, 300));
-  if (tagErr) throw new Error(`Kanban tag links: ${tagErr.message}`);
-
-  const taggedIds = [
-    ...new Set((tagLinks ?? []).map((l) => l.conversation_id as string)),
-  ];
-
-  let cards: KanbanCard[] = [];
-
-  if (taggedIds.length > 0) {
-    let taggedQuery = supabase
-      .from("conversations")
-      .select(
-        `
-        id, last_message_preview, last_message_at, inbox_id, company_id, contact_id, assignee_id,
-        contacts ( id, name, phone_number ),
-        inboxes ( name )
-      `,
-      )
-      .eq("company_id", filters.companyId)
-      .in("id", taggedIds)
-      .order("last_message_at", { ascending: false });
-
-    if (filters.inboxId) taggedQuery = taggedQuery.eq("inbox_id", filters.inboxId);
+  const withFilters = <Q,>(query: Q): Q => {
+    let q = query;
+    const on = () => q as unknown as FilterableQuery<Q>;
+    if (filters.inboxId) q = on().eq("inbox_id", filters.inboxId);
     if (filters.assignee === "mine" && filters.userId) {
-      taggedQuery = taggedQuery.eq("assignee_id", filters.userId);
+      q = on().eq("assignee_id", filters.userId);
     } else if (filters.assignee === "unassigned") {
-      taggedQuery = taggedQuery.is("assignee_id", null);
+      q = on().is("assignee_id", null);
     }
     if (searchPattern) {
-      if (searchContactIds && searchContactIds.length > 0) {
-        taggedQuery = taggedQuery.or(
-          `contact_id.in.(${searchContactIds.join(",")}),last_message_preview.ilike."${searchPattern}"`,
-        );
-      } else {
-        taggedQuery = taggedQuery.ilike("last_message_preview", searchPattern);
-      }
+      q =
+        searchContactIds && searchContactIds.length > 0
+          ? on().or(
+              `contact_id.in.(${searchContactIds.join(",")}),last_message_preview.ilike."${searchPattern}"`,
+            )
+          : on().ilike("last_message_preview", searchPattern);
     }
+    return q;
+  };
 
-    const { data: taggedRows, error: taggedErr } = await taggedQuery.range(
-      from,
-      to,
-    );
-    if (taggedErr) throw new Error(`Kanban tagged: ${taggedErr.message}`);
+  const { data: taggedIds, error: taggedErr } = await withFilters(
+    admin
+      .from("conversations")
+      .select("id, conversation_tags!inner(tag_id)")
+      .eq("company_id", filters.companyId)
+      .eq("conversation_tags.tag_id", filters.tagId),
+  )
+    .order("last_message_at", { ascending: false, nullsFirst: false })
+    .range(from, to);
+  if (taggedErr) throw new Error(`Kanban tagged: ${taggedErr.message}`);
 
-    cards = dedupeByContact(
-      (taggedRows ?? [])
-        .map((row) => mapCard(row as ConvRow, filters.tagId))
-        .filter((c): c is KanbanCard => Boolean(c)),
-    );
-  }
-
+  let untaggedIds: Array<{ id: unknown }> = [];
   if (filters.includeUntagged) {
-    const { data: allKanbanTags, error: tagsErr } = await supabase
+    const { data: kanbanTags, error: tagsErr } = await admin
       .from("tags")
       .select("id")
       .eq("company_id", filters.companyId)
       .eq("is_kanban_column", true);
     if (tagsErr) throw new Error(`Kanban tags: ${tagsErr.message}`);
 
-    const kanbanTagIds = (allKanbanTags ?? []).map((t) => t.id as string);
-    const taggedSet = new Set<string>();
-    if (kanbanTagIds.length > 0) {
-      const { data: links, error: linksErr } = await supabase
-        .from("conversation_tags")
-        .select("conversation_id")
-        .in("tag_id", kanbanTagIds)
-        .limit(2000);
-      if (linksErr) throw new Error(`Kanban all links: ${linksErr.message}`);
-      for (const l of links ?? []) taggedSet.add(l.conversation_id as string);
-    }
-
-    // Over-fetch recent conversations and keep those without a kanban tag
-    let untaggedQuery = supabase
-      .from("conversations")
-      .select(
-        `
-        id, last_message_preview, last_message_at, inbox_id, company_id, contact_id, assignee_id,
-        contacts ( id, name, phone_number ),
-        inboxes ( name )
-      `,
-      )
-      .eq("company_id", filters.companyId)
-      .order("last_message_at", { ascending: false });
-
-    if (filters.inboxId) untaggedQuery = untaggedQuery.eq("inbox_id", filters.inboxId);
-    if (filters.assignee === "mine" && filters.userId) {
-      untaggedQuery = untaggedQuery.eq("assignee_id", filters.userId);
-    } else if (filters.assignee === "unassigned") {
-      untaggedQuery = untaggedQuery.is("assignee_id", null);
-    }
-    if (searchPattern) {
-      if (searchContactIds && searchContactIds.length > 0) {
-        untaggedQuery = untaggedQuery.or(
-          `contact_id.in.(${searchContactIds.join(",")}),last_message_preview.ilike."${searchPattern}"`,
-        );
-      } else {
-        untaggedQuery = untaggedQuery.ilike(
-          "last_message_preview",
-          searchPattern,
-        );
-      }
-    }
-
-    const { data: recentRows, error: recentErr } = await untaggedQuery.range(
-      0,
-      Math.max(to + pageSize * 3, 80),
-    );
-    if (recentErr) throw new Error(`Kanban untagged: ${recentErr.message}`);
-
-    const untaggedCards = dedupeByContact(
-      (recentRows ?? [])
-        .filter((row) => !taggedSet.has(row.id as string))
-        .map((row) => mapCard(row as ConvRow, filters.tagId))
-        .filter((c): c is KanbanCard => Boolean(c)),
-    ).slice(offset, offset + fetchSize);
-
-    const seen = new Set(cards.map((c) => c.contactId));
-    for (const card of untaggedCards) {
-      if (seen.has(card.contactId)) continue;
-      seen.add(card.contactId);
-      cards.push(card);
-    }
+    // Anti-join: conversations with no link to any of this company's columns.
+    const { data, error: untaggedErr } = await withFilters(
+      admin
+        .from("conversations")
+        .select("id, conversation_tags(tag_id)")
+        .eq("company_id", filters.companyId)
+        .in(
+          "conversation_tags.tag_id",
+          (kanbanTags ?? []).map((t) => t.id as string),
+        )
+        .is("conversation_tags", null),
+    )
+      .order("last_message_at", { ascending: false, nullsFirst: false })
+      .range(from, to);
+    if (untaggedErr) throw new Error(`Kanban untagged: ${untaggedErr.message}`);
+    untaggedIds = data ?? [];
   }
+
+  const ids = [...(taggedIds ?? []), ...untaggedIds].map((r) => r.id as string);
+  const { data: rows, error: rowsErr } = ids.length
+    ? await supabase
+        .from("conversations")
+        .select(CARD_SELECT)
+        .in("id", ids)
+        .order("last_message_at", { ascending: false, nullsFirst: false })
+    : { data: [], error: null };
+  if (rowsErr) throw new Error(`Kanban cards: ${rowsErr.message}`);
+
+  // Tagged cards first, then untagged, each newest first as returned.
+  const tagged = new Set((taggedIds ?? []).map((r) => r.id as string));
+  const allRows = (rows ?? []) as unknown as ConvRow[];
+  const cards = dedupeByContact(
+    [
+      ...allRows.filter((r) => tagged.has(r.id)),
+      ...allRows.filter((r) => !tagged.has(r.id)),
+    ]
+      .map((row) => mapCard(row, filters.tagId))
+      .filter((c): c is KanbanCard => Boolean(c)),
+  );
 
   const page = cards.slice(0, pageSize);
   const hasMore = cards.length > pageSize;
@@ -264,19 +236,22 @@ export async function loadAllKanbanColumns(
   const hasMoreByTag: Record<string, boolean> = {};
   const offsetByTag: Record<string, number> = {};
 
-  // Sequential to avoid thundering herd / flaky concurrent cookie client usage
-  for (let index = 0; index < tags.length; index++) {
-    const tag = tags[index];
-    const result = await loadKanbanColumnCards(supabase, {
-      ...filters,
-      tagId: tag.id,
-      offset: 0,
-      includeUntagged: index === 0,
-    });
+  const results = await Promise.all(
+    tags.map((tag, index) =>
+      loadKanbanColumnCards(supabase, {
+        ...filters,
+        tagId: tag.id,
+        offset: 0,
+        includeUntagged: index === 0,
+      }),
+    ),
+  );
+  tags.forEach((tag, index) => {
+    const result = results[index];
     hasMoreByTag[tag.id] = result.hasMore;
     offsetByTag[tag.id] = result.nextOffset;
     cards.push(...result.cards);
-  }
+  });
 
   return { cards, hasMoreByTag, offsetByTag };
 }
