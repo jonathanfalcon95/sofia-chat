@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getUserDb } from "@/lib/db/client";
 import { fetchConversationListPage } from "@/lib/conversations/fetch-conversation-list";
+import { decodePageCursor } from "@/lib/conversations/page-cursor";
 import { CONVERSATION_PAGE_SIZE } from "@/lib/conversations/types";
 import { getSessionUserId } from "@/lib/rbac/session";
 
@@ -18,6 +19,12 @@ export async function GET(request: Request) {
       ? assigneeRaw
       : "all";
 
+  const beforeParam = params.get("before");
+  const before = beforeParam ? decodePageCursor(beforeParam) : null;
+  if (beforeParam && !before) {
+    return NextResponse.json({ error: "invalid_cursor" }, { status: 400 });
+  }
+
   try {
     const db = await getUserDb();
     const page = await fetchConversationListPage(db, {
@@ -27,7 +34,7 @@ export async function GET(request: Request) {
       phoneSearch: params.get("phoneSearch") ?? undefined,
       contactTagId: params.get("contactTagId") || undefined,
       companyId: params.get("companyId") || undefined,
-      before: params.get("before"),
+      before,
       pageSize: CONVERSATION_PAGE_SIZE,
     });
     return NextResponse.json(page);

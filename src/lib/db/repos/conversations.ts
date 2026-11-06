@@ -2,6 +2,10 @@ import {
   CONVERSATION_LIST_SELECT,
   type AssigneeFilter,
 } from "@/lib/conversations/types";
+import {
+  olderThanCursorFilter,
+  type PageCursor,
+} from "@/lib/conversations/page-cursor";
 import { ilikePattern } from "@/lib/pagination";
 import type { Db } from "../types";
 
@@ -12,8 +16,8 @@ export type ConversationPageFilters = {
   assigneeId?: string;
   contactIds?: string[] | null;
   companyId?: string;
-  /** Cursor: only rows strictly older than this timestamp */
-  before?: string | null;
+  /** Cursor: only rows after this position in the list */
+  before?: PageCursor | null;
   limit: number;
 };
 
@@ -25,6 +29,7 @@ export async function listConversationsPage(
     .from("conversations")
     .select(CONVERSATION_LIST_SELECT)
     .order("last_message_at", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: false })
     .limit(filters.limit);
 
   if (filters.assigneeId) {
@@ -44,7 +49,7 @@ export async function listConversationsPage(
   }
 
   if (filters.before) {
-    query = query.lt("last_message_at", filters.before);
+    query = query.or(olderThanCursorFilter("last_message_at", filters.before));
   }
 
   return query;

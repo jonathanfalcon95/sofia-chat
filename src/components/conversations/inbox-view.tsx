@@ -27,6 +27,7 @@ import {
   Building2,
 } from "lucide-react";
 import { cn, isWithinCustomerWindow } from "@/lib/utils";
+import { encodePageCursor } from "@/lib/conversations/page-cursor";
 import {
   rememberMediaPreview,
   takeMediaPreview,
@@ -123,8 +124,7 @@ async function fetchConversationPage(
     | "phoneSearch"
     | "contactTagId"
     | "companyId"
-    | "before"
-  >,
+  > & { before?: string },
 ): Promise<ConversationListPage> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
@@ -656,11 +656,11 @@ export function InboxView({
   const loadOlderConversations = useCallback(async () => {
     if (loadingMoreConversations || !hasMoreConversations) return;
     const last = conversations[conversations.length - 1];
-    const before = last?.last_message_at;
-    if (!before) {
+    if (!last?.last_message_at) {
       setHasMoreConversations(false);
       return;
     }
+    const before = encodePageCursor(last.last_message_at, last.id);
     setLoadingMoreConversations(true);
     try {
       const f = filtersRef.current;
@@ -1150,7 +1150,10 @@ export function InboxView({
     const oldest = messages[0];
     if (!oldest) return;
     setLoadingOlder(true);
-    const { data } = await fetchMessagesPage(activeId, oldest.created_at);
+    const { data } = await fetchMessagesPage(
+      activeId,
+      encodePageCursor(oldest.created_at, oldest.id),
+    );
     const older =((data as MessageRow[]) ?? []).slice().reverse();
     setHasMoreMessages((data?.length ?? 0) >= MESSAGE_PAGE_SIZE);
     setMessages((prev) => {

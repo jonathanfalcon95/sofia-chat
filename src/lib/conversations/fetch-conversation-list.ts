@@ -6,6 +6,7 @@ import {
   searchContactIdsByNameOrPhone,
 } from "@/lib/db/repos/conversations";
 import { normalizeConversations } from "./normalize";
+import type { PageCursor } from "./page-cursor";
 import {
   CONVERSATION_PAGE_SIZE,
   type AssigneeFilter,
@@ -27,8 +28,8 @@ export type ConversationListFilters = {
   contactTagId?: string;
   /** Restrict to one company (required for Super Admin / multi-empresa). */
   companyId?: string;
-  /** Cursor: only rows strictly older than this ISO timestamp */
-  before?: string | null;
+  /** Cursor: only rows after this position in the list */
+  before?: PageCursor | null;
   pageSize?: number;
 };
 

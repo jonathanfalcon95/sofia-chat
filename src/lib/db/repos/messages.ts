@@ -1,3 +1,7 @@
+import {
+  olderThanCursorFilter,
+  type PageCursor,
+} from "@/lib/conversations/page-cursor";
 import { MESSAGE_PAGE_SIZE, MESSAGE_SELECT } from "@/lib/conversations/types";
 import type { Db } from "../types";
 
@@ -5,7 +9,7 @@ import type { Db } from "../types";
 export async function listConversationMessagesPage(
   db: Db,
   conversationId: string,
-  before?: string | null,
+  before?: PageCursor | null,
 ) {
   let query = db
     .from("messages")
@@ -14,10 +18,13 @@ export async function listConversationMessagesPage(
     .neq("type", "reaction");
 
   if (before) {
-    query = query.lt("created_at", before);
+    query = query.or(olderThanCursorFilter("created_at", before));
   }
 
-  return query.order("created_at", { ascending: false }).limit(MESSAGE_PAGE_SIZE);
+  return query
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(MESSAGE_PAGE_SIZE);
 }
 
 /** Inbound messages strictly newer than this timestamp, oldest first. */
