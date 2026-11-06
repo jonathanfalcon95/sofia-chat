@@ -10,7 +10,6 @@ import {
   mergeOutboundConversation,
   mergeOutboundMessage,
   newInboundConversation,
-  outboundTimestamp,
   planInboundMessage,
   planOutboundMessage,
   remapEventType,
@@ -371,15 +370,12 @@ async function upsertOutboundConversation(
   preview: string,
   clock: Clock,
 ): Promise<string> {
-  const [existing] = await tx.run(sql`SELECT id, last_message_at, last_message_preview
+  const [existing] = await tx.run(sql`SELECT id, last_message_at
                                       FROM chatbase.conversations WITH (UPDLOCK, HOLDLOCK)
                                       WHERE inbox_id = ${inboxId} AND contact_id = ${contactId}`);
   if (existing) {
     const merged = mergeOutboundConversation(
-      {
-        last_message_at: existing.last_message_at as string | null,
-        last_message_preview: existing.last_message_preview as string | null,
-      },
+      { last_message_at: existing.last_message_at as string | null },
       at,
       preview,
     );
@@ -422,9 +418,9 @@ async function applyOutbound(tx: SqlDb, envelope: Envelope, clock: Clock): Promi
     };
   }
 
-  // HOLDLOCK also keeps the id free until the insert below, so the insert's `on conflict` branch
-  // in the SQL, reachable there only by a concurrent call, has no counterpart here.
-  const matches = await tx.run(sql`SELECT ${MESSAGE_COLUMNS} FROM chatbase.messages WITH (UPDLOCK, HOLDLOCK)
+  // No HOLDLOCK yet: a range lock on the message index taken before the contact's would invert the
+  // inbound order (contact, conversation, message) and deadlock on a conversation with both going on.
+  const matches = await tx.run(sql`SELECT ${MESSAGE_COLUMNS} FROM chatbase.messages WITH (UPDLOCK)
                                    WHERE ycloud_message_id = ${envelope.msgId} OR wamid = ${envelope.wamid}`);
   if (matches.length > 0) {
     for (const match of matches) {
@@ -441,7 +437,7 @@ async function applyOutbound(tx: SqlDb, envelope: Envelope, clock: Clock): Promi
   if (companyId === null) return { ok: true, skipped: "inbox_unassigned" };
 
   const contactId = await upsertOutboundContact(tx, companyId, envelope.to, clock);
-  const at = outboundTimestamp(envelope.msg, clock.now);
+  const at = inboundTimestamp(envelope.msg, clock.now);
   const conversationId = await upsertOutboundConversation(
     tx,
     companyId,
@@ -451,8 +447,20 @@ async function applyOutbound(tx: SqlDb, envelope: Envelope, clock: Clock): Promi
     plan.preview,
     clock,
   );
-  // sent_by is NULL here, so the trigger messages_apply_send_time had its say on created_at.
-  const createdAt = applySendTime(envelope.msg) ?? at;
+  // The insert's `on conflict`: a concurrent call for the same id got here first.
+  const [conflict] =
+    envelope.msgId === null
+      ? []
+      : await tx.run(sql`SELECT ${MESSAGE_COLUMNS} FROM chatbase.messages WITH (UPDLOCK, HOLDLOCK)
+                         WHERE ycloud_message_id = ${envelope.msgId}`);
+  if (conflict) {
+    const patch = mergeOutboundMessage(storedMessage(conflict), envelope, plan.content);
+    await tx.run(sql`UPDATE chatbase.messages SET ${patchAssignments(patch)}
+                     WHERE id = ${conflict.id as string}`);
+    return { ok: true, conversation_id: conversationId };
+  }
+  // sent_by is NULL here, so the trigger messages_apply_send_time decides over the column default.
+  const createdAt = applySendTime(envelope.msg) ?? clock.now;
   await insertMessage(
     tx,
     companyId,

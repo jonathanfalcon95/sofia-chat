@@ -91,6 +91,13 @@ const TABLES = [
     json: ["template_components", "raw_payload", "reactions"],
     columns: { id: guid, conversation_id: guid, company_id: guid, direction: text(8), type: text(64), body: max, template_name: text(512), template_language: text(32), template_components: max, ycloud_message_id: text(128), status: text(32), media_url: max, raw_payload: max, sent_by: guid, created_at: date, media_mime: text(255), media_filename: text(1024), media_sha256: text(128), wamid: text(256), reply_to_wamid: text(256), reactions: max },
   },
+  // Only recent events: enough to recognize a YCloud retry, whose schedule ends after about 5.6 h.
+  {
+    name: "webhook_events",
+    json: ["payload"],
+    recentHours: 6,
+    columns: { id: guid, ycloud_event_id: text(128), event_type: text(128), payload: max, processed_at: date },
+  },
   { name: "error_logs", json: ["context"], columns: { id: guid, created_at: date, updated_at: date, level: text(8), status: text(16), source: text(200), message: max, error_name: text(256), error_code: text(128), http_status: int, stack: max, context: max, company_id: guid, user_id: guid, request_id: text(128), resolved_at: date, resolved_by: guid, resolution_note: max } },
 ];
 
@@ -254,7 +261,14 @@ async function load() {
           if (table.name === "messages" && i % 2000 === 0) log(`messages: ${copied} filas, pico ${peak}%`);
         }
       } else {
-        const query = table.select ? table.select() : { text: `select ${selectList(table)} from public.${table.name}` };
+        const query = table.select
+          ? table.select()
+          : table.recentHours
+            ? {
+                text: `select ${selectList(table)} from public.${table.name} where processed_at >= $1::timestamptz - make_interval(hours => $2::int)`,
+                values: [snapshot, table.recentHours],
+              }
+            : { text: `select ${selectList(table)} from public.${table.name}` };
         const { rows } = await source.query(query);
         expected = rows.length;
         copied = await copy(sql, table, rows);
@@ -267,6 +281,11 @@ async function load() {
     log(`${table.name}: ${copied}/${expected} en ${Math.round((Date.now() - t0) / 1000)} s`);
   }
   log(`carga terminada en ${Math.round((Date.now() - started) / 1000)} s; pico de carga ${peak}%`);
+
+  // Everything written after this point is what the return to Supabase has to copy back.
+  await sqlRun(sql, `
+    DELETE FROM chatbase.app_flags WHERE [key] = 'cut_version';
+    INSERT INTO chatbase.app_flags ([key], value) VALUES ('cut_version', CAST(CAST(@@DBTS AS bigint) AS nvarchar(32)));`);
 
   // Verification against the same snapshot.
   const problems = [];
@@ -336,7 +355,7 @@ async function wipe() {
     log(`vaciada ${table.name}`);
   }
   await sqlRun(sql, "DELETE FROM chatbase.webhook_events");
-  await sqlRun(sql, "DELETE FROM chatbase.webhook_inbox");
+  // chatbase.webhook_inbox stays: it may hold captured webhooks that are still to be processed.
   sql.close();
 }
 

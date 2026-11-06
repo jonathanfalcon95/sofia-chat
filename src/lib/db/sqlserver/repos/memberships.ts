@@ -71,24 +71,30 @@ export async function listActiveMembersByRoleName(
   companyId?: string,
 ) {
   return rows(async () => {
+    if (companyId && !isUuid(companyId)) return [];
     const access = await accessOf(db);
+    // roles.name is case-insensitive here; Postgres compared it exactly.
     const found = await db.run(sql`
-      SELECT DISTINCT m.company_id, p.id, p.full_name, p.email
+      SELECT m.id AS membership_id, m.company_id, r.name AS role_name,
+             p.id, p.full_name, p.email
       FROM chatbase.company_memberships m
       JOIN chatbase.membership_roles mr ON mr.membership_id = m.id
-      JOIN chatbase.roles r ON r.id = mr.role_id AND r.name = ${roleName}
+      JOIN chatbase.roles r ON r.id = mr.role_id
       LEFT JOIN chatbase.profiles p ON p.id = m.user_id
         ${access ? sql`AND ${scope.profilesRead(access, "p.id")}` : raw("")}
       ${where([
         sql`m.is_active = 1`,
+        sql`r.name COLLATE Latin1_General_100_BIN2 = ${roleName}`,
         companyId ? sql`m.company_id = ${companyId}` : null,
         access ? scope.company(access, "m.company_id") : null,
+        access ? scope.rolesRead(access, "r.company_id") : null,
       ])}`);
-    return found.map((row) => ({
-      company_id: row.company_id,
-      profiles: row.id
-        ? { id: row.id, full_name: row.full_name, email: row.email }
+    return [...groupBy(found, "membership_id").values()].map((links) => ({
+      company_id: links[0].company_id,
+      profiles: links[0].id
+        ? { id: links[0].id, full_name: links[0].full_name, email: links[0].email }
         : null,
+      membership_roles: links.map((link) => ({ roles: { name: link.role_name } })),
     }));
   });
 }

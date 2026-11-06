@@ -49,6 +49,11 @@ export function utc(value: string) {
   return Number.isNaN(time.getTime()) ? value : time.toISOString();
 }
 
+/** A caller's id as Access holds it: lowercase, since Postgres compared uuids by value. */
+export function accessKey(id: unknown) {
+  return typeof id === "string" ? id.toLowerCase() : null;
+}
+
 /** messages_select and messages_update: the message's conversation is in a reachable inbox. */
 export function messageVisible(access: Access, conversationColumn: string): SqlFragment {
   return sql`EXISTS (

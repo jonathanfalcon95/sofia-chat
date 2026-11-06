@@ -287,7 +287,7 @@ describe("outbound", () => {
     const result = await run(tx, UPDATED, outbound({ wamid: "w1", status: "sent", text: { body: "hola" } }));
     assert.deepEqual(result, { ok: true, updated: true, wamid: "w1" });
     const select = find(/SELECT[\s\S]*FROM chatbase\.messages/)[0];
-    assert.match(select.text, /WITH \(UPDLOCK, HOLDLOCK\)/);
+    assert.match(select.text, /WITH \(UPDLOCK\)/);
     assert.deepEqual(select.params, ["m1", "w1"]);
     const updates = find(/UPDATE chatbase\.messages/);
     assert.equal(updates.length, 2);
@@ -314,39 +314,93 @@ describe("outbound", () => {
     await assert.rejects(run(tx, UPDATED, outbound({ type: "order", order: { product_items: {} } })), { name: "PgRaisedError" });
   });
 
-  test("inserts with created_at from sendTime", async () => {
+  test("a new message locks in the inbound order: contact, conversation, then the index range", async () => {
+    const { tx, statements } = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
+    await run(tx, UPDATED, outbound({ text: { body: "hola" } }));
+    const locks = statements
+      .map((s) => /FROM chatbase\.(\w+) WITH \((UPDLOCK(?:, HOLDLOCK)?)\)/.exec(s.text))
+      .filter((match) => match !== null)
+      .map((match) => `${match[1]} ${match[2]}`);
+    assert.deepEqual(locks, [
+      "messages UPDLOCK",
+      "contacts UPDLOCK, HOLDLOCK",
+      "conversations UPDLOCK, HOLDLOCK",
+      "messages UPDLOCK, HOLDLOCK",
+    ]);
+  });
+
+  test("a concurrent call that inserted the id first is the insert's on conflict", async () => {
+    const stored = { id: "a", body: "[text]", wamid: null, reply_to_wamid: null, media_url: null, media_mime: null, media_filename: null, media_sha256: null, raw_payload: { a: 1 } };
+    const { tx, find } = fakeTx([
+      INBOXES,
+      NEW_CONTACT,
+      NEW_CONVERSATION,
+      [/FROM chatbase\.messages WITH \(UPDLOCK, HOLDLOCK\)/, [stored]],
+    ]);
+    const result = await run(tx, UPDATED, outbound({ wamid: "w1", status: "sent", text: { body: "hola" } }));
+    assert.deepEqual(result, { ok: true, conversation_id: "conv-1" });
+    assert.equal(find(/INSERT INTO chatbase\.messages/).length, 0);
+    const update = find(/UPDATE chatbase\.messages/)[0].params;
+    assert.equal(update[0], "sent");
+    assert.equal(update[8], "hola");
+    assert.equal(update[9], "a");
+  });
+
+  test("the conversation takes createTime and the message sendTime", async () => {
     const { tx, find } = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
-    const sendTime = "2026-01-02T00:00:00.000Z";
-    const payload = outbound({ sendTime, createTime: "bad", text: { body: "hola" } });
+    const sendTime = "2026-01-02T00:00:00.700Z";
+    const createTime = "2026-01-02T00:00:00.000Z";
+    const payload = outbound({ sendTime, createTime, text: { body: "hola" } });
     assert.deepEqual(await run(tx, UPDATED, payload), { ok: true, conversation_id: "conv-1" });
     assert.deepEqual(find(/INSERT INTO chatbase\.contacts/)[0].params, ["company-1", "+1555", NOW_ISO, NOW_ISO]);
-    assert.deepEqual(find(/INSERT INTO chatbase\.conversations/)[0].params, ["company-1", "inbox-1", "contact-1", sendTime, "hola", NOW_ISO, NOW_ISO]);
+    assert.deepEqual(find(/INSERT INTO chatbase\.conversations/)[0].params, ["company-1", "inbox-1", "contact-1", createTime, "hola", NOW_ISO, NOW_ISO]);
     const message = find(/INSERT INTO chatbase\.messages/)[0].params;
     assert.equal(message[2], "outbound");
     assert.equal(message[14], sendTime);
     assert.equal(message.length, 15);
   });
 
-  test("with no times created_at is now", async () => {
+  test("with no times both are now", async () => {
     const { tx, find } = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
     await run(tx, UPDATED, outbound({}));
+    assert.equal(find(/INSERT INTO chatbase\.conversations/)[0].params[3], NOW_ISO);
     assert.equal(find(/INSERT INTO chatbase\.messages/)[0].params[14], NOW_ISO);
   });
 
-  test("a bad sendTime fails the event", async () => {
+  test("with only sendTime the conversation is now, the column's own coalesce", async () => {
     const { tx, find } = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
-    await assert.rejects(run(tx, UPDATED, outbound({ sendTime: "bad" })), { code: "22007" });
-    assert.equal(find(/INSERT INTO chatbase\.messages/).length, 0);
+    const sendTime = "2026-01-02T00:00:00.000Z";
+    await run(tx, UPDATED, outbound({ sendTime }));
+    assert.equal(find(/INSERT INTO chatbase\.conversations/)[0].params[3], NOW_ISO);
+    assert.equal(find(/INSERT INTO chatbase\.messages/)[0].params[14], sendTime);
   });
 
-  test("existing conversation keeps the newest time and preview", async () => {
+  test("a bad sendTime is swallowed by the trigger and created_at is now", async () => {
+    const { tx, find } = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
+    const createTime = "2026-01-02T00:00:00.000Z";
+    await run(tx, UPDATED, outbound({ sendTime: "bad", createTime }));
+    assert.equal(find(/INSERT INTO chatbase\.messages/)[0].params[14], createTime);
+    const none = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
+    await run(none.tx, UPDATED, outbound({ sendTime: "bad" }));
+    assert.equal(none.find(/INSERT INTO chatbase\.messages/)[0].params[14], NOW_ISO);
+  });
+
+  test("a bad or empty createTime fails the event, whatever sendTime says", async () => {
+    for (const createTime of ["bad", ""]) {
+      const { tx, find } = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
+      await assert.rejects(run(tx, UPDATED, outbound({ sendTime: "2026-01-02T00:00:00Z", createTime })), { code: "22007" });
+      assert.equal(find(/INSERT INTO chatbase\.messages/).length, 0);
+    }
+  });
+
+  test("existing conversation keeps the newest time, and an older message takes the preview", async () => {
     const { tx, find } = fakeTx([
       INBOXES,
       [/SELECT[\s\S]*FROM chatbase\.contacts/, [{ id: "contact-1" }]],
-      [/SELECT[\s\S]*FROM chatbase\.conversations/, [{ id: "conv-1", last_message_at: "2030-01-01T00:00:00.000Z", last_message_preview: "newest" }]],
+      [/SELECT[\s\S]*FROM chatbase\.conversations/, [{ id: "conv-1", last_message_at: "2030-01-01T00:00:00.000Z" }]],
     ]);
-    await run(tx, UPDATED, outbound({ sendTime: "2026-01-02T00:00:00Z", text: { body: "older" } }));
-    assert.deepEqual(find(/UPDATE chatbase\.conversations/)[0].params, ["2030-01-01T00:00:00.000Z", "newest", NOW_ISO, "conv-1"]);
+    await run(tx, UPDATED, outbound({ createTime: "2026-01-02T00:00:00Z", text: { body: "older" } }));
+    assert.deepEqual(find(/UPDATE chatbase\.conversations/)[0].params, ["2030-01-01T00:00:00.000Z", "older", NOW_ISO, "conv-1"]);
     assert.deepEqual(find(/UPDATE chatbase\.contacts/)[0].params, [NOW_ISO, "contact-1"]);
   });
 

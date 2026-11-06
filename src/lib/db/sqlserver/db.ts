@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { buildAccess, type Access } from "./access.ts";
 import { execute, transaction, type Row } from "./connection.ts";
-import { sql, type SqlFragment } from "./sql.ts";
+import { isUuid, sql, type SqlFragment } from "./sql.ts";
 
 /**
  * SQL Server handle. `user` plays the role of the Supabase session client and is limited by
@@ -76,7 +76,7 @@ const accessForUser = cache(async (userId: string): Promise<Access> =>
  */
 export async function accessOf(db: SqlDb): Promise<Access | null> {
   if (db.actor.kind === "system") return null;
-  if (!db.actor.userId) return buildAccess({ userId: "", ...NO_ACCESS });
+  if (!isUuid(db.actor.userId)) return buildAccess({ userId: "", ...NO_ACCESS });
   return accessForUser(db.actor.userId);
 }
 
@@ -88,8 +88,18 @@ export type SqlResult<T> = {
   count: number | null;
 };
 
+/** A value a uuid column can't take: conversion error 8169, 22P02 in Postgres. */
+const CONVERSION_TO_UUID = 8169;
+
 export function failure(err: unknown): SqlResult<never> {
   const e = err as { message?: string; number?: number };
+  if (e?.number === CONVERSION_TO_UUID) {
+    return {
+      data: null as never,
+      error: { message: "invalid input syntax for type uuid", code: "22P02" },
+      count: null,
+    };
+  }
   return {
     data: null as never,
     error: { message: e?.message ?? "sql_error", code: e?.number ? String(e.number) : undefined },

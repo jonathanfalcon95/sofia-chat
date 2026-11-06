@@ -47,7 +47,18 @@ async function sqlServerSession(request: NextRequest) {
   return response;
 }
 
+/** During a switch of database nobody writes through the UI; webhooks are captured instead. */
+function maintenanceResponse(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  if (path === "/maintenance") return NextResponse.next();
+  if (path.startsWith("/api/")) {
+    return NextResponse.json({ error: "maintenance" }, { status: 503 });
+  }
+  return NextResponse.rewrite(new URL("/maintenance", request.url));
+}
+
 export async function proxy(request: NextRequest) {
+  if (process.env.MAINTENANCE_MODE === "1") return maintenanceResponse(request);
   return usesSqlServer() ? sqlServerSession(request) : updateSession(request);
 }
 

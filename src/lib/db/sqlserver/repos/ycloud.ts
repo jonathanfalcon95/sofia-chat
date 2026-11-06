@@ -2,6 +2,7 @@ import { hasPermission, scope, type Access } from "../access";
 import { accessOf, done, type SqlDb } from "../db";
 import { isUuid, raw, sql, where } from "../sql";
 import {
+  accessKey,
   insertStatement,
   isSystem,
   maybeOne,
@@ -131,7 +132,7 @@ function checkMovedInbox(access: Access | null, patch: Record<string, unknown>) 
   if (
     access &&
     patch.company_id !== undefined &&
-    !hasPermission(access, patch.company_id as string | null, "inboxes.manage")
+    !hasPermission(access, accessKey(patch.company_id), "inboxes.manage")
   ) {
     throw rlsViolation();
   }
@@ -160,7 +161,7 @@ export async function listInboxesForPhoneSync(db: SqlDb) {
 export async function insertSyncedInbox(db: SqlDb, row: Record<string, unknown>) {
   return one(async () => {
     const access = await accessOf(db);
-    if (access && !hasPermission(access, row.company_id as string | null, "inboxes.manage")) {
+    if (access && !hasPermission(access, accessKey(row.company_id), "inboxes.manage")) {
       throw rlsViolation();
     }
     return db.run(insertStatement(INBOXES, row, SYNCED_INBOX_COLUMNS));

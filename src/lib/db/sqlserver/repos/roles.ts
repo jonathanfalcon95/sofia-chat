@@ -199,20 +199,28 @@ export async function listCompanyRolesPage(
   });
 }
 
+/** permissions_select is for authenticated users, with no condition beyond that. */
+async function anonymous(db: SqlDb) {
+  const access = await accessOf(db);
+  return access !== null && !access.userId;
+}
+
 export async function listPermissions(db: SqlDb) {
-  return rows(() =>
-    db.run(sql`SELECT code, description FROM chatbase.permissions ORDER BY code`),
-  );
+  return rows(async () => {
+    if (await anonymous(db)) return [];
+    return db.run(sql`SELECT code, description FROM chatbase.permissions ORDER BY code`);
+  });
 }
 
 export async function listPermissionsByCodes(db: SqlDb, codes: string[]) {
-  // COLLATE: OPENJSON's value column has its own binary collation, and code's differs in name.
-  return rows(() =>
-    db.run(sql`
+  return rows(async () => {
+    if (await anonymous(db)) return [];
+    // COLLATE: OPENJSON's value column has its own binary collation, and code's differs in name.
+    return db.run(sql`
       SELECT id, code
       FROM chatbase.permissions
-      WHERE code COLLATE Latin1_General_BIN2 IN ${textList(codes)}`),
-  );
+      WHERE code COLLATE Latin1_General_BIN2 IN ${textList(codes)}`);
+  });
 }
 
 export async function insertRolePermissionRows(

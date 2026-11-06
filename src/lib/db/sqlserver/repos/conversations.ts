@@ -314,6 +314,9 @@ export async function addConversationTag(db: SqlDb, conversationId: string, tagI
     const access = await accessOf(db);
     await inTransaction(db, async (tx) => {
       await requireConversationPermission(tx, access, conversationId, "conversations.tag");
+      // Serializes taggers of this conversation, so two concurrent columns can't both remain.
+      await tx.run(sql`
+        SELECT id FROM chatbase.conversations WITH (UPDLOCK, ROWLOCK) WHERE id = ${conversationId}`);
       // Port of the enforce_one_kanban_tag trigger, which ran with the caller's RLS on tags.
       const [tag] = await tx.run(sql`
         SELECT is_kanban_column FROM chatbase.tags

@@ -88,6 +88,8 @@ for (const [table, def] of Object.entries(TABLES)) {
 let leaks = 0;
 let missing = 0;
 const report = [];
+const seenProfiles = new Set();
+let compared = 0;
 
 for (const [index, user] of users.entries()) {
   const userId = user.id;
@@ -110,6 +112,17 @@ for (const [index, user] of users.entries()) {
     inboxes: inboxesAll,
   });
 
+  // RLS runs row by row on production: one user per distinct set of permissions is enough. The
+  // profiles policy depends on the user only through their companies, which the signature includes.
+  const signature = JSON.stringify([
+    access.isPlatformAdmin,
+    [...access.permissionsByCompany.entries()].map(([c, p]) => [c, [...p].sort()]).sort(),
+    [...access.inboxIds].sort(),
+  ]);
+  if (seenProfiles.has(signature)) continue;
+  seenProfiles.add(signature);
+  compared += 1;
+
   await source.query("begin read only");
   await source.query("set local role authenticated");
   await source.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: userId, role: "authenticated" })]);
@@ -129,17 +142,15 @@ for (const [index, user] of users.entries()) {
     perTable[table] = { rls: rlsVisible.size, sql: sqlVisible.size, ...(extra ? { DE_MAS: extra } : {}), ...(absent ? { faltan: absent } : {}) };
   }
 
-  // messages are too many to list per user: compare per inbox reachability through a sample.
-  const { rows: msgSample } = await source.query("select id from public.messages tablesample system (1) limit 300");
   await source.query("rollback");
 
   const bad = Object.entries(perTable).filter(([, v]) => v.DE_MAS || v.faltan);
-  report.push({ usuario: index + 1, admin: access.isPlatformAdmin, empresas: access.companyIds.length, inboxes: access.inboxIds.length, diferencias: Object.fromEntries(bad) });
-  void msgSample;
+  const line = { usuario: index + 1, admin: access.isPlatformAdmin, empresas: access.companyIds.length, inboxes: access.inboxIds.length, visibles: Object.fromEntries(Object.entries(perTable).map(([t, v]) => [t, v.sql])), diferencias: Object.fromEntries(bad) };
+  report.push(line);
+  console.log(JSON.stringify(line));
 }
 
 await source.end();
 connection.close();
-for (const line of report) console.log(JSON.stringify(line));
-console.log(JSON.stringify({ usuarios: users.length, filasDeMas: leaks, filasFaltantes: missing }));
+console.log(JSON.stringify({ usuarios: users.length, perfilesComparados: compared, filasDeMas: leaks, filasFaltantes: missing }));
 process.exit(leaks || missing ? 1 : 0);

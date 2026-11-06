@@ -18,7 +18,6 @@ import {
   mergeOutboundConversation,
   mergeOutboundMessage,
   newInboundConversation,
-  outboundTimestamp,
   parseTimestamptz,
   pgJsonTimestamp,
   pgLeft,
@@ -200,18 +199,6 @@ describe("timestamps", () => {
     assert.throws(() => inboundTimestamp({ createTime: "" }, NOW), { code: "22007" });
     assert.throws(() => inboundTimestamp({ createTime: "bad" }, NOW), { code: "22007" });
     assert.throws(() => inboundTimestamp({ createTime: 1700000000 }, NOW), { code: "22007" });
-  });
-
-  test("outbound: empty is guarded, bad raises, createTime is read only without sendTime", () => {
-    const send = "2026-01-02T00:00:00.000Z";
-    const create = "2026-01-03T00:00:00.000Z";
-    assert.equal(outboundTimestamp({}, NOW), NOW);
-    assert.equal(outboundTimestamp({ sendTime: "", createTime: "" }, NOW), NOW);
-    assert.equal(outboundTimestamp({ sendTime: send, createTime: create }, NOW).toISOString(), send);
-    assert.equal(outboundTimestamp({ sendTime: "", createTime: create }, NOW).toISOString(), create);
-    assert.equal(outboundTimestamp({ sendTime: send, createTime: "bad" }, NOW).toISOString(), send);
-    assert.throws(() => outboundTimestamp({ sendTime: "bad", createTime: create }, NOW), { code: "22007" });
-    assert.throws(() => outboundTimestamp({ createTime: "bad" }, NOW), { code: "22007" });
   });
 
   test("messages_apply_send_time swallows bad values", () => {
@@ -626,23 +613,19 @@ describe("conversations", () => {
     assert.equal(mergeInboundConversation({ status: "resolved", unread_count: 0 }, AT, "p").status, "resolved");
   });
 
-  test("outbound: greatest ignores NULLs, and the preview follows the newest", () => {
-    assert.deepEqual(mergeOutboundConversation({ last_message_at: null, last_message_preview: "old" }, OLDER, "new"), {
+  test("outbound: greatest ignores NULLs, and an older message still takes the preview", () => {
+    assert.deepEqual(mergeOutboundConversation({ last_message_at: null }, OLDER, "new"), {
       lastMessageAt: OLDER.toISOString(),
       preview: "new",
     });
-    assert.deepEqual(mergeOutboundConversation({ last_message_at: AT.toISOString(), last_message_preview: "old" }, OLDER, "new"), {
-      lastMessageAt: AT.toISOString(),
-      preview: "old",
-    });
-    assert.deepEqual(mergeOutboundConversation({ last_message_at: OLDER.toISOString(), last_message_preview: "old" }, AT, "new"), {
+    assert.deepEqual(mergeOutboundConversation({ last_message_at: AT.toISOString() }, OLDER, "new"), {
       lastMessageAt: AT.toISOString(),
       preview: "new",
     });
-  });
-
-  test("outbound: an equal time takes the new preview", () => {
-    assert.equal(mergeOutboundConversation({ last_message_at: AT, last_message_preview: "old" }, AT, "new").preview, "new");
+    assert.deepEqual(mergeOutboundConversation({ last_message_at: OLDER.toISOString() }, AT, "new"), {
+      lastMessageAt: AT.toISOString(),
+      preview: "new",
+    });
   });
 });
 

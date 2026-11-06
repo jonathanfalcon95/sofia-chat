@@ -41,8 +41,9 @@ export async function insertTags(db: SqlDb, tags: TagValues[]) {
       SELECT company_id, name, color, position, is_kanban_column
       FROM OPENJSON(${JSON.stringify(tags)}) WITH (
         company_id uniqueidentifier,
-        name nvarchar(200),
-        color nvarchar(32),
+        -- Unbounded here: a narrower type would cut long text silently, not fail like the column.
+        name nvarchar(max),
+        color nvarchar(max),
         position int,
         is_kanban_column bit
       )`);

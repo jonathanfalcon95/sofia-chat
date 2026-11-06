@@ -2,6 +2,7 @@ import { hasInboxAccess, hasPermission, scope, type Access } from "../access";
 import { accessOf, done, type SqlDb } from "../db";
 import { isUuid, raw, sql, where, type SqlFragment } from "../sql";
 import {
+  accessKey,
   insertStatement,
   maybeOne,
   messageVisible,
@@ -259,7 +260,7 @@ export async function updateConversationLastMessage(
     if (
       access &&
       patch.inbox_id !== undefined &&
-      !hasInboxAccess(access, patch.inbox_id as string | null)
+      !hasInboxAccess(access, accessKey(patch.inbox_id))
     ) {
       throw rlsViolation();
     }

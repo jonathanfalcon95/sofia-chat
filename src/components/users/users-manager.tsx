@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Pencil, Plus } from "lucide-react";
 import { updateMembership } from "@/app/actions/admin";
 import { PageHeader } from "@/components/page-header";
+import { ResetPassword } from "@/components/users/reset-password";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -412,6 +413,7 @@ export function UsersManager({
               {editing?.profiles?.email}
             </DialogDescription>
           </DialogHeader>
+          {editing ? <ResetPassword userId={editing.user_id} /> : null}
           {editing ? (
             <form className="space-y-3" onSubmit={onEdit}>
               <div className="space-y-1.5">

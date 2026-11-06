@@ -109,6 +109,16 @@ function runOn(connection: Connection, statement: SqlFragment): Promise<Row[]> {
   });
 }
 
+/**
+ * Session-level statements. execSql wraps its text in sp_executesql, a scope of its own: it would
+ * raise error 266 on BEGIN TRANSACTION and undo SET XACT_ABORT on return.
+ */
+function runBatch(connection: Connection, text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    connection.execSqlBatch(new Request(text, (err) => (err ? reject(err) : resolve())));
+  });
+}
+
 function isTransient(err: unknown) {
   const e = err as { number?: number; code?: string };
   return (
@@ -140,19 +150,13 @@ export async function transaction<T>(work: (run: TransactionRunner) => Promise<T
   for (let attempt = 0; ; attempt++) {
     const connection = await pool().acquire().promise;
     try {
-      await runOn(connection, {
-        text: "SET XACT_ABORT ON; BEGIN TRANSACTION",
-        params: [],
-      });
+      await runBatch(connection, "SET XACT_ABORT ON; BEGIN TRANSACTION");
       try {
         const result = await work((statement) => runOn(connection, statement));
-        await runOn(connection, { text: "COMMIT TRANSACTION", params: [] });
+        await runBatch(connection, "COMMIT TRANSACTION");
         return result;
       } catch (err) {
-        await runOn(connection, {
-          text: "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION",
-          params: [],
-        }).catch(() => {});
+        await runBatch(connection, "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION").catch(() => {});
         throw err;
       }
     } catch (err) {

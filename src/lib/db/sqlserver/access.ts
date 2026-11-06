@@ -161,6 +161,8 @@ export const scope = {
   /** roles_select: templates for everyone, company roles for its members. */
   rolesRead(access: Access, companyColumn: string): SqlFragment {
     if (access.isPlatformAdmin) return TRUE_SQL;
+    // The policy is for authenticated users, so an anonymous caller doesn't get the templates.
+    if (!access.userId) return FALSE_SQL;
     return sql`(${raw(companyColumn)} IS NULL OR ${inList(companyColumn, access.companyIds)})`;
   },
   /** tickets_select: tickets.view or tickets.manage on its company. */

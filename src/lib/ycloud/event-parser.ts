@@ -194,17 +194,13 @@ export function pgJsonTimestamp(date: Date): string {
   return `${iso.slice(0, 19)}${fraction ? `.${fraction}` : ""}+00:00`;
 }
 
-/** `coalesce((msg->>'createTime')::timestamptz, now())`. An empty string raises here. */
+/**
+ * `coalesce((msg->>'createTime')::timestamptz, now())`, what both directions store on the
+ * conversation. An empty string raises here. sendTime only reaches messages.created_at, through
+ * the trigger: migration 20261021010000 read it here too, but that part never reached the database.
+ */
 export function inboundTimestamp(msg: unknown, now: Date): Date {
   const createTime = arrowText(msg, "createTime");
-  return createTime === null ? now : parseTimestamptz(createTime);
-}
-
-/** coalesce over nullif(sendTime, '') then nullif(createTime, ''): unguarded, and lazy. */
-export function outboundTimestamp(msg: unknown, now: Date): Date {
-  const sendTime = nullIfEmpty(arrowText(msg, "sendTime"));
-  if (sendTime !== null) return parseTimestamptz(sendTime);
-  const createTime = nullIfEmpty(arrowText(msg, "createTime"));
   return createTime === null ? now : parseTimestamptz(createTime);
 }
 
@@ -661,9 +657,9 @@ export function newInboundConversation(at: Date, preview: string) {
   };
 }
 
-/** `greatest` ignores NULLs; the preview follows when the message is not older. */
+/** `greatest` ignores NULLs. The preview has no guard: an older message still overwrites it. */
 export function mergeOutboundConversation(
-  existing: { last_message_at: string | Date | null; last_message_preview: string | null },
+  existing: { last_message_at: string | Date | null },
   at: Date,
   preview: string,
 ) {
@@ -671,7 +667,7 @@ export function mergeOutboundConversation(
   const isLatest = stored === null || at.getTime() >= stored.getTime();
   return {
     lastMessageAt: (isLatest ? at : (stored as Date)).toISOString(),
-    preview: isLatest ? preview : existing.last_message_preview,
+    preview,
   };
 }
 

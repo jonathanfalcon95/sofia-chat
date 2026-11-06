@@ -3,6 +3,7 @@ import { hasInboxAccess, hasPermission, scope, type Access } from "../access";
 import type { Row } from "../connection";
 import { rows, type SqlDb, type SqlResult } from "../db";
 import { isUuid, raw, sql, uuidList, where, type SqlFragment } from "../sql";
+import { utc } from "./shared";
 
 /**
  * A plain `any` for `data` would absorb the Supabase branch's array type at the dispatch line, and
@@ -20,9 +21,12 @@ export function rlsViolation() {
   return new Error("new row violates row-level security policy");
 }
 
-/** Normalized to UTC: converting a string with an offset to datetime2 would drop the offset. */
+/**
+ * Normalized to UTC: converting a string with an offset to datetime2 would drop the offset. Without
+ * a zone it reads as UTC, like the Postgres session did. Invalid text throws.
+ */
 export function utcTimestamp(value: string) {
-  return new Date(value).toISOString();
+  return new Date(utc(value)).toISOString();
 }
 
 /** Rows after the cursor in a list ordered by the timestamp and then id, both descending. */
