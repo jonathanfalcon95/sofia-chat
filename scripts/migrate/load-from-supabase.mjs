@@ -359,6 +359,30 @@ async function wipe() {
   sql.close();
 }
 
+/**
+ * Faster than `wipe` on a full copy: drops this schema's tables and creates them again. Discards
+ * chatbase.webhook_inbox too, so it refuses while captured webhooks are pending.
+ */
+async function recreate() {
+  if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
+  const sql = await sqlConnect();
+  const [{ pending }] = await sqlRun(sql, "SELECT COUNT(*) AS pending FROM chatbase.webhook_inbox WHERE processed_at IS NULL");
+  if (pending > 0) throw new Error(`Hay ${pending} webhooks capturados sin procesar`);
+  const foreignKeys = await sqlRun(sql, `
+    SELECT 'ALTER TABLE chatbase.' + OBJECT_NAME(parent_object_id) + ' DROP CONSTRAINT ' + name AS statement
+    FROM sys.foreign_keys WHERE schema_id = SCHEMA_ID('chatbase')`);
+  for (const { statement } of foreignKeys) await sqlRun(sql, statement);
+  const tables = await sqlRun(sql, "SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID('chatbase')");
+  for (const { name } of tables) await sqlRun(sql, `DROP TABLE chatbase.${name}`);
+  log(`eliminadas ${tables.length} tablas`);
+  for (const file of ["001_baseline.sql", "002_change_version.sql"]) {
+    const batches = readFileSync(new URL(`../../db/sqlserver/${file}`, import.meta.url), "utf8").split(/^\s*GO\s*$/m).map((b) => b.trim()).filter(Boolean);
+    for (const batch of batches) await sqlRun(sql, batch);
+    log(`aplicado ${file}`);
+  }
+  sql.close();
+}
+
 /** Applies one file from db/sqlserver, batch by batch. */
 async function applyFile() {
   if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
@@ -386,9 +410,9 @@ async function grantApp() {
   sql.close();
 }
 
-const commands = { preflight, "apply-ddl": applyDdl, load, wipe, "apply-file": applyFile, "grant-app": grantApp };
+const commands = { preflight, "apply-ddl": applyDdl, load, wipe, recreate, "apply-file": applyFile, "grant-app": grantApp };
 if (!commands[command]) {
-  console.error("Comandos: preflight | apply-ddl | load | wipe | apply-file | grant-app");
+  console.error("Comandos: preflight | apply-ddl | load | wipe | recreate | apply-file | grant-app");
   process.exit(2);
 }
 try {
