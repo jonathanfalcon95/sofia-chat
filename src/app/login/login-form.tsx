@@ -5,7 +5,6 @@ import Image from "next/image";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { isSafeNextPath } from "@/lib/auth/safe-next-path";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,14 +18,23 @@ export function LoginForm({ next }: { next?: string }) {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (authError) {
+    let failure: string | null = null;
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        failure = body?.error ?? "No se pudo iniciar sesión";
+      }
+    } catch {
+      failure = "No se pudo iniciar sesión";
+    }
+    if (failure) {
       setLoading(false);
-      toast.error(authError.message);
+      toast.error(failure);
       return;
     }
 
@@ -36,9 +44,6 @@ export function LoginForm({ next }: { next?: string }) {
       window.location.assign(next);
       return;
     }
-
-    // Ensure auth cookies are persisted before the server renders the inbox.
-    await supabase.auth.getSession();
 
     // Full navigation (not router.replace) so the first SSR request includes
     // the fresh session — soft navigation caused intermittent server errors.

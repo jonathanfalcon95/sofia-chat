@@ -11,6 +11,11 @@ import { extractInboundMedia } from "@/lib/media";
 import { logSystemError } from "@/lib/errors/log-system-error";
 import { enrichMessageTextFromWebhook } from "@/lib/ycloud/message-enrichment";
 import {
+  captureWebhook,
+  isWebhookCaptureOn,
+  type CapturedWebhook,
+} from "@/lib/ycloud/webhook-capture";
+import {
   decryptAccountWebhookSecret,
   listYCloudAccountRows,
   type YCloudAccountRow,
@@ -164,6 +169,31 @@ export async function processVerifiedYCloudEvent(args: {
   return NextResponse.json({ received: true, result: data });
 }
 
+/** Processes the event, or stores it for later while the database is being switched. */
+async function acceptVerifiedEvent(args: Parameters<typeof processVerifiedYCloudEvent>[0]) {
+  if (!isWebhookCaptureOn()) return processVerifiedYCloudEvent(args);
+  await captureWebhook(args.accountId, args.rawBody);
+  return NextResponse.json({ received: true, captured: true });
+}
+
+/** Handles a captured event whose signature was checked when it arrived. */
+export async function processCapturedWebhook(webhook: CapturedWebhook) {
+  const parsed = parsePayload(webhook.rawBody);
+  if ("error" in parsed && parsed.error) return parsed.error;
+  const { payload, eventId, eventType } = parsed as {
+    payload: Record<string, unknown>;
+    eventId: string;
+    eventType: string;
+  };
+  return processVerifiedYCloudEvent({
+    rawBody: webhook.rawBody,
+    eventId,
+    eventType,
+    payload,
+    accountId: webhook.accountId,
+  });
+}
+
 export async function handleYCloudWebhookRequest(
   request: Request,
   accountId?: string,
@@ -197,7 +227,7 @@ export async function handleYCloudWebhookRequest(
     if (!secret || !verifyYCloudSignature(rawBody, signature, secret)) {
       return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
     }
-    return processVerifiedYCloudEvent({
+    return acceptVerifiedEvent({
       rawBody,
       eventId,
       eventType,
@@ -227,7 +257,7 @@ export async function handleYCloudWebhookRequest(
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }
 
-  return processVerifiedYCloudEvent({
+  return acceptVerifiedEvent({
     rawBody,
     eventId,
     eventType,

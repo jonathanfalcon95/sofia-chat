@@ -1,7 +1,8 @@
 import { cache } from "react";
 import { listActiveMembershipsForSession } from "@/lib/db/repos/memberships";
 import { getSessionProfile } from "@/lib/db/repos/profiles";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUserId } from "@/lib/auth/current-user";
+import { getUserDb } from "@/lib/db/client";
 import type { PermissionCode } from "@/lib/rbac/permissions";
 
 export type AppSession = {
@@ -38,20 +39,13 @@ export function sessionShowsAssignedCompanies(session: AppSession) {
  * Who is signed in, without loading memberships. For hot read routes whose access RLS decides;
  * use `getAppSession` to check permissions.
  */
-export const getSessionUserId = cache(async (): Promise<string | null> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.getClaims();
-  const userId = data?.claims?.sub;
-  return error || !userId ? null : userId;
-});
+export const getSessionUserId = getCurrentUserId;
 
 export const getAppSession = cache(async (): Promise<AppSession | null> => {
-  const supabase = await createClient();
-  const { data: claimsData, error: claimsError } =
-    await supabase.auth.getClaims();
-  const userId = claimsData?.claims?.sub;
-  if (claimsError || !userId) return null;
+  const userId = await getCurrentUserId();
+  if (!userId) return null;
 
+  const supabase = await getUserDb();
   const { data: profile } = await getSessionProfile(supabase, userId);
 
   if (!profile) return null;

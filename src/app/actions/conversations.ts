@@ -25,7 +25,7 @@ import {
   setTicketStatus,
   setTicketSupportResponse,
 } from "@/lib/db/repos/tickets";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUserId } from "@/lib/auth/current-user";
 import {
   getAppSession,
   sessionCanEditTicketContentForCompany,
@@ -36,10 +36,9 @@ export async function assignConversation(
   conversationId: string,
   assigneeId: string | null,
 ) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabase = await getUserDb();
+  const userId = await getCurrentUserId();
+  const user = userId ? { id: userId } : null;
   if (!user) throw new Error("No autenticado");
 
   const { data: conversation, error: convError } = await getConversationCompany(
@@ -100,10 +99,9 @@ export async function setConversationTag(conversationId: string, tagId: string) 
 }
 
 export async function addConversationNote(conversationId: string, companyId: string, body: string) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabase = await getUserDb();
+  const userId = await getCurrentUserId();
+  const user = userId ? { id: userId } : null;
   if (!user) throw new Error("unauthorized");
 
   const trimmed = body.trim();
@@ -121,10 +119,9 @@ export async function addConversationNote(conversationId: string, companyId: str
 }
 
 export async function deleteConversationNote(noteId: string, conversationId: string) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabase = await getUserDb();
+  const userId = await getCurrentUserId();
+  const user = userId ? { id: userId } : null;
   if (!user) throw new Error("unauthorized");
 
   const { error } = await removeConversationNote(
@@ -303,10 +300,9 @@ export async function startConversationWithTemplate(input: {
   templateName: string;
   languageCode?: string;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabase = await getUserDb();
+  const userId = await getCurrentUserId();
+  const user = userId ? { id: userId } : null;
   if (!user) throw new Error("unauthorized");
 
   const { data: inbox } = await findInboxForNewConversation(

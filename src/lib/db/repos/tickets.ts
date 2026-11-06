@@ -1,4 +1,6 @@
 import { ilikePattern } from "@/lib/pagination";
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/tickets";
 import type { Db } from "../types";
 
 export type TicketPageFilters = {
@@ -20,6 +22,8 @@ export async function listTicketsPage(
   from: number,
   to: number,
 ) {
+  if (isSqlDb(db)) return sql.listTicketsPage(db, filters, from, to);
+
   let ticketsQuery = db
     .from("tickets")
     .select(
@@ -75,6 +79,8 @@ export async function insertTicket(
     createdBy: string;
   },
 ) {
+  if (isSqlDb(db)) return sql.insertTicket(db, ticket);
+
   // Agents escalate to the support queue — never assign from create.
   return db.from("tickets").insert({
     company_id: ticket.companyId,
@@ -88,6 +94,8 @@ export async function insertTicket(
 }
 
 export async function getTicketOwnership(db: Db, ticketId: string) {
+  if (isSqlDb(db)) return sql.getTicketOwnership(db, ticketId);
+
   return db
     .from("tickets")
     .select("id, company_id, created_by, conversation_id")
@@ -100,6 +108,8 @@ export async function setTicketContent(
   ticketId: string,
   content: { title: string; description: string; priority: string },
 ) {
+  if (isSqlDb(db)) return sql.setTicketContent(db, ticketId, content);
+
   return db
     .from("tickets")
     .update({
@@ -111,6 +121,8 @@ export async function setTicketContent(
 }
 
 export async function setTicketStatus(db: Db, ticketId: string, status: string) {
+  if (isSqlDb(db)) return sql.setTicketStatus(db, ticketId, status);
+
   return db.from("tickets").update({ status }).eq("id", ticketId);
 }
 
@@ -119,6 +131,8 @@ export async function setTicketAssignee(
   ticketId: string,
   assigneeId: string | null,
 ) {
+  if (isSqlDb(db)) return sql.setTicketAssignee(db, ticketId, assigneeId);
+
   return db
     .from("tickets")
     .update({ assignee_id: assigneeId })
@@ -130,6 +144,8 @@ export async function setTicketSupportResponse(
   ticketId: string,
   response: { body: string; respondedAt: string; respondedBy: string },
 ) {
+  if (isSqlDb(db)) return sql.setTicketSupportResponse(db, ticketId, response);
+
   return db
     .from("tickets")
     .update({

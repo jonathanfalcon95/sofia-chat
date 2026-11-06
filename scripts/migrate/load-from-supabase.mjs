@@ -3,6 +3,9 @@
 //   node scripts/migrate/load-from-supabase.mjs preflight
 //   node scripts/migrate/load-from-supabase.mjs apply-ddl --confirm <database>
 //   node scripts/migrate/load-from-supabase.mjs load --confirm <database> [--months 2]
+//   node scripts/migrate/load-from-supabase.mjs wipe --confirm <database>
+//   node scripts/migrate/load-from-supabase.mjs apply-file --file 00x_nombre.sql --confirm <database>
+//   node scripts/migrate/load-from-supabase.mjs grant-app --confirm <database>
 //
 // Reads DATABASE_URL (Postgres connection), SQL_SERVER, SQL_DB and AZ_SUBSCRIPTION from the
 // environment and signs in to SQL with the az CLI token. Supabase is only ever read, inside one
@@ -87,6 +90,13 @@ const TABLES = [
     sinceCutoff: "created_at",
     json: ["template_components", "raw_payload", "reactions"],
     columns: { id: guid, conversation_id: guid, company_id: guid, direction: text(8), type: text(64), body: max, template_name: text(512), template_language: text(32), template_components: max, ycloud_message_id: text(128), status: text(32), media_url: max, raw_payload: max, sent_by: guid, created_at: date, media_mime: text(255), media_filename: text(1024), media_sha256: text(128), wamid: text(256), reply_to_wamid: text(256), reactions: max },
+  },
+  // Only recent events: enough to recognize a YCloud retry, whose schedule ends after about 5.6 h.
+  {
+    name: "webhook_events",
+    json: ["payload"],
+    recentHours: 6,
+    columns: { id: guid, ycloud_event_id: text(128), event_type: text(128), payload: max, processed_at: date },
   },
   { name: "error_logs", json: ["context"], columns: { id: guid, created_at: date, updated_at: date, level: text(8), status: text(16), source: text(200), message: max, error_name: text(256), error_code: text(128), http_status: int, stack: max, context: max, company_id: guid, user_id: guid, request_id: text(128), resolved_at: date, resolved_by: guid, resolution_note: max } },
 ];
@@ -251,7 +261,14 @@ async function load() {
           if (table.name === "messages" && i % 2000 === 0) log(`messages: ${copied} filas, pico ${peak}%`);
         }
       } else {
-        const query = table.select ? table.select() : { text: `select ${selectList(table)} from public.${table.name}` };
+        const query = table.select
+          ? table.select()
+          : table.recentHours
+            ? {
+                text: `select ${selectList(table)} from public.${table.name} where processed_at >= $1::timestamptz - make_interval(hours => $2::int)`,
+                values: [snapshot, table.recentHours],
+              }
+            : { text: `select ${selectList(table)} from public.${table.name}` };
         const { rows } = await source.query(query);
         expected = rows.length;
         copied = await copy(sql, table, rows);
@@ -264,6 +281,11 @@ async function load() {
     log(`${table.name}: ${copied}/${expected} en ${Math.round((Date.now() - t0) / 1000)} s`);
   }
   log(`carga terminada en ${Math.round((Date.now() - started) / 1000)} s; pico de carga ${peak}%`);
+
+  // Everything written after this point is what the return to Supabase has to copy back.
+  await sqlRun(sql, `
+    DELETE FROM chatbase.app_flags WHERE [key] = 'cut_version';
+    INSERT INTO chatbase.app_flags ([key], value) VALUES ('cut_version', CAST(CAST(@@DBTS AS bigint) AS nvarchar(32)));`);
 
   // Verification against the same snapshot.
   const problems = [];
@@ -324,9 +346,49 @@ async function load() {
   sql.close();
 }
 
-const commands = { preflight, "apply-ddl": applyDdl, load };
+/** Empties chatbase so `load` can run again. Only ever touches this schema. */
+async function wipe() {
+  if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
+  const sql = await sqlConnect();
+  for (const table of [...TABLES].reverse()) {
+    await sqlRun(sql, `DELETE FROM chatbase.${table.name}`);
+    log(`vaciada ${table.name}`);
+  }
+  await sqlRun(sql, "DELETE FROM chatbase.webhook_events");
+  // chatbase.webhook_inbox stays: it may hold captured webhooks that are still to be processed.
+  sql.close();
+}
+
+/** Applies one file from db/sqlserver, batch by batch. */
+async function applyFile() {
+  if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
+  const file = option("file");
+  if (!file || !/^\d{3}_[a-z_]+\.sql$/.test(file)) throw new Error("Usa --file 00x_nombre.sql");
+  const sql = await sqlConnect();
+  const batches = readFileSync(new URL(`../../db/sqlserver/${file}`, import.meta.url), "utf8").split(/^\s*GO\s*$/m).map((b) => b.trim()).filter(Boolean);
+  for (const batch of batches) await sqlRun(sql, batch);
+  log(`aplicado ${file}: ${batches.length} lotes`);
+  sql.close();
+}
+
+/** Creates or updates the app's user, limited to this schema. The password comes from APP_PASSWORD. */
+async function grantApp() {
+  if (option("confirm") !== DATABASE) throw new Error(`Usa --confirm ${DATABASE}`);
+  const password = required("APP_PASSWORD").replace(/'/g, "''");
+  const sql = await sqlConnect();
+  await sqlRun(sql, `
+    IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'chatbase_app')
+      CREATE USER chatbase_app WITH PASSWORD = '${password}', DEFAULT_SCHEMA = chatbase;
+    ELSE
+      ALTER USER chatbase_app WITH PASSWORD = '${password}';
+    GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::chatbase TO chatbase_app;`);
+  log("usuario de la app listo");
+  sql.close();
+}
+
+const commands = { preflight, "apply-ddl": applyDdl, load, wipe, "apply-file": applyFile, "grant-app": grantApp };
 if (!commands[command]) {
-  console.error("Comandos: preflight | apply-ddl | load");
+  console.error("Comandos: preflight | apply-ddl | load | wipe | apply-file | grant-app");
   process.exit(2);
 }
 try {

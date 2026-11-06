@@ -1,7 +1,11 @@
 import { ilikePattern } from "@/lib/pagination";
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/contacts";
 import type { Db } from "../types";
 
 export async function listContactTagOptions(db: Db) {
+  if (isSqlDb(db)) return sql.listContactTagOptions(db);
+
   return db
     .from("tags")
     .select("id, name, color, company_id")
@@ -10,10 +14,14 @@ export async function listContactTagOptions(db: Db) {
 }
 
 export async function listCompaniesForContactFilter(db: Db) {
+  if (isSqlDb(db)) return sql.listCompaniesForContactFilter(db);
+
   return db.from("companies").select("id, name").order("name");
 }
 
 export async function listContactIdsByTag(db: Db, tagId: string) {
+  if (isSqlDb(db)) return sql.listContactIdsByTag(db, tagId);
+
   return db.from("contact_tags").select("contact_id").eq("tag_id", tagId);
 }
 
@@ -32,6 +40,8 @@ export async function listContactIdsPage(
     to: number;
   },
 ) {
+  if (isSqlDb(db)) return sql.listContactIdsPage(db, args);
+
   const { scopedCompanyIds, companyId, contactIds, q, from, to } = args;
 
   let idsQuery = db
@@ -52,6 +62,8 @@ export async function listContactIdsPage(
 }
 
 export async function listContactsByIds(db: Db, contactIds: string[]) {
+  if (isSqlDb(db)) return sql.listContactsByIds(db, contactIds);
+
   return db
     .from("contacts")
     .select(

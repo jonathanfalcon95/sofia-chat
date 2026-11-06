@@ -1,9 +1,13 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/companies";
 import type { Db } from "../types";
 
 export async function insertCompany(
   db: Db,
   values: { name: string; slug: string; guid_company: string | null },
 ) {
+  if (isSqlDb(db)) return sql.insertCompany(db, values);
+
   return db.from("companies").insert(values).select("id").single();
 }
 
@@ -17,10 +21,14 @@ export async function updateCompanyById(
     guid_company: string | null;
   },
 ) {
+  if (isSqlDb(db)) return sql.updateCompanyById(db, id, values);
+
   return db.from("companies").update(values).eq("id", id);
 }
 
 export async function listCompanyNames(db: Db) {
+  if (isSqlDb(db)) return sql.listCompanyNames(db);
+
   return db.from("companies").select("id, name").order("name");
 }
 
@@ -36,6 +44,8 @@ export async function listCompaniesPage(
     to: number;
   },
 ) {
+  if (isSqlDb(db)) return sql.listCompaniesPage(db, filters);
+
   let query = db
     .from("companies")
     .select("id, name, slug, is_active, guid_company", { count: "exact" })

@@ -1,10 +1,16 @@
+import { isSqlDb } from "../sqlserver/db";
+import * as sql from "../sqlserver/repos/inboxes";
 import type { Db } from "../types";
 
 export async function listCompanyInboxIds(db: Db, companyId: string) {
+  if (isSqlDb(db)) return sql.listCompanyInboxIds(db, companyId);
+
   return db.from("inboxes").select("id").eq("company_id", companyId);
 }
 
 export async function listInboxCompaniesByIds(db: Db, ids: string[]) {
+  if (isSqlDb(db)) return sql.listInboxCompaniesByIds(db, ids);
+
   return db.from("inboxes").select("id, company_id").in("id", ids);
 }
 
@@ -13,6 +19,8 @@ export async function assignInboxesToCompany(
   ids: string[],
   companyId: string,
 ) {
+  if (isSqlDb(db)) return sql.assignInboxesToCompany(db, ids, companyId);
+
   return db.from("inboxes").update({ company_id: companyId }).in("id", ids);
 }
 
@@ -22,6 +30,8 @@ export async function unassignCompanyInboxes(
   ids: string[],
   companyId: string,
 ) {
+  if (isSqlDb(db)) return sql.unassignCompanyInboxes(db, ids, companyId);
+
   return db
     .from("inboxes")
     .update({ company_id: null })
@@ -34,6 +44,8 @@ export async function updateInboxById(
   id: string,
   values: { name: string; is_active: boolean },
 ) {
+  if (isSqlDb(db)) return sql.updateInboxById(db, id, values);
+
   return db.from("inboxes").update(values).eq("id", id);
 }
 
@@ -43,6 +55,8 @@ export async function listActiveCompanyInboxIds(
   companyId: string,
   inboxIds: string[],
 ) {
+  if (isSqlDb(db)) return sql.listActiveCompanyInboxIds(db, companyId, inboxIds);
+
   return db
     .from("inboxes")
     .select("id")
@@ -52,6 +66,8 @@ export async function listActiveCompanyInboxIds(
 }
 
 export async function listActiveAssignedInboxes(db: Db) {
+  if (isSqlDb(db)) return sql.listActiveAssignedInboxes(db);
+
   return db
     .from("inboxes")
     .select("id, name, company_id, phone_number, is_active")
@@ -60,10 +76,14 @@ export async function listActiveAssignedInboxes(db: Db) {
 }
 
 export async function listInboxNamesByIds(db: Db, ids: string[]) {
+  if (isSqlDb(db)) return sql.listInboxNamesByIds(db, ids);
+
   return db.from("inboxes").select("id, name").in("id", ids);
 }
 
 export async function listAllInboxes(db: Db) {
+  if (isSqlDb(db)) return sql.listAllInboxes(db);
+
   return db
     .from("inboxes")
     .select("id, name, phone_number, company_id, is_active")
@@ -85,6 +105,8 @@ export async function listInboxesPage(
     to: number;
   },
 ) {
+  if (isSqlDb(db)) return sql.listInboxesPage(db, filters);
+
   let query = db
     .from("inboxes")
     .select(

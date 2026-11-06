@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { getSystemDb } from "@/lib/db/client";
+import { getCurrentUserId } from "@/lib/auth/current-user";
+import { getSystemDb, getUserDb } from "@/lib/db/client";
 import { findMessageMedia } from "@/lib/db/repos/media";
 import { findConversationInbox } from "@/lib/db/repos/messaging";
 import { downloadStorageObject } from "@/lib/db/repos/storage";
@@ -35,10 +35,9 @@ export async function GET(
     new URL(request.url).searchParams.get("download") === "1" ||
     new URL(request.url).searchParams.get("attachment") === "1";
 
-  const supabase = await createClient();
+  const supabase = await getUserDb();
   // Verified locally: getUser() added a round trip to Auth for every image.
-  const { data: claimsData } = await supabase.auth.getClaims();
-  if (!claimsData?.claims?.sub) {
+  if (!(await getCurrentUserId())) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

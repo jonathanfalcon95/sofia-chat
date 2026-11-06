@@ -1,4 +1,8 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { passwordProblem } from "@/lib/auth/login-policy";
+import { createUser } from "@/lib/auth/sql-auth";
+import { usesSqlServer } from "@/lib/db/backend";
 import { getSystemDb, hasServiceRole } from "@/lib/db/client";
 import { listActiveCompanyInboxIds } from "@/lib/db/repos/inboxes";
 import {
@@ -92,18 +96,36 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data: created, error: createError } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { full_name: fullName || email.split("@")[0] },
-  });
+  let newUserId: string;
+  if (usesSqlServer()) {
+    const problem = passwordProblem(password);
+    if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+    const created = await createUser({
+      email,
+      password,
+      fullName: fullName || email.split("@")[0],
+    });
+    if (!created.ok) {
+      return NextResponse.json({ error: created.error }, { status: 400 });
+    }
+    newUserId = created.userId;
+  } else {
+    const { data: created, error: createError } = await (
+      admin as SupabaseClient
+    ).auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: fullName || email.split("@")[0] },
+    });
 
-  if (createError || !created.user) {
-    return NextResponse.json(
-      { error: createError?.message ?? "create_failed" },
-      { status: 400 },
-    );
+    if (createError || !created.user) {
+      return NextResponse.json(
+        { error: createError?.message ?? "create_failed" },
+        { status: 400 },
+      );
+    }
+    newUserId = created.user.id;
   }
 
   // Use service role for membership writes (avoid silent RLS failures)
@@ -111,7 +133,7 @@ export async function POST(request: Request) {
     admin,
     {
       company_id: companyId,
-      user_id: created.user.id,
+      user_id: newUserId,
       is_active: true,
     },
   );
@@ -149,7 +171,7 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({
-    userId: created.user.id,
+    userId: newUserId,
     membershipId: membership.id,
     inboxIds,
   });
