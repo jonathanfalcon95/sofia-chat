@@ -695,7 +695,10 @@ export type MessagePatch = {
   body: string | null;
 };
 
-/** The `on conflict` of the inbound insert: incoming values win, and a placeholder body yields. */
+/**
+ * The `on conflict` of the inbound insert: incoming values win, and a placeholder body yields. A
+ * file already in the app's storage stays there: the incoming YCloud link expires in days.
+ */
 export function mergeInboundMessage(
   existing: StoredMessage,
   envelope: Envelope,
@@ -706,7 +709,9 @@ export function mergeInboundMessage(
     rawPayload: envelope.msg,
     wamid: envelope.wamid ?? existing.wamid,
     replyTo: envelope.replyTo ?? existing.reply_to_wamid,
-    mediaUrl: content.mediaUrl ?? existing.media_url,
+    mediaUrl: existing.media_url?.startsWith("storage:")
+      ? existing.media_url
+      : (content.mediaUrl ?? existing.media_url),
     mediaMime: content.mediaMime ?? existing.media_mime,
     mediaFilename: content.mediaFilename ?? existing.media_filename,
     mediaSha256: content.mediaSha256 ?? existing.media_sha256,

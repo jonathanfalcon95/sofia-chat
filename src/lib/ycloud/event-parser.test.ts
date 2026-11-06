@@ -652,6 +652,12 @@ describe("message merges", () => {
     assert.equal(empty.status, "received");
   });
 
+  test("an inbound repeat keeps a file already in the app's storage", () => {
+    const archived = { ...STORED, media_url: "storage:chat-media/ycloud/a/b/c.jpg" };
+    const patch = mergeInboundMessage(archived, inboundEnvelope({ id: "m" }), content("new", MEDIA));
+    assert.equal(patch.mediaUrl, "storage:chat-media/ycloud/a/b/c.jpg");
+  });
+
   test("inbound: a stored placeholder or NULL body yields, to anything", () => {
     const envelope = inboundEnvelope({ id: "m" });
     const body = (stored: string | null, incoming: string) => mergeInboundMessage({ ...STORED, body: stored }, envelope, content(incoming)).body;
