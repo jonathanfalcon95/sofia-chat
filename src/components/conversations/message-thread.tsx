@@ -66,6 +66,13 @@ function quotedPreview(m: MessageRow) {
   if (m.type === "sticker") return "Sticker";
   if (m.type === "location")
     return `📍 ${sanitizeMessageBody(m.body, m.type)}`;
+  // The body of a link button carries "text: url"; the quote shows what the customer read.
+  const rich = RICH_TYPES.has(m.type) ? parseRichContent(m.rich_content) : null;
+  const richText =
+    rich?.body ??
+    (rich?.header?.type === "text" ? rich.header.text : null) ??
+    rich?.buttons?.[0]?.text;
+  if (richText) return richText.slice(0, 120);
   return sanitizeMessageBody(
     m.body || m.template_name || m.type || "Mensaje",
     m.type,
