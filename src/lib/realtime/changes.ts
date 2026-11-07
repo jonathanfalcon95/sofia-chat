@@ -62,7 +62,7 @@ async function readMessages(cursor: string): Promise<Row[]> {
     SELECT TOP (${BATCH}) CAST(m.change_version AS bigint) AS version,
       m.id, m.conversation_id, m.company_id, m.direction, m.type, m.body, m.status, m.created_at,
       m.template_name, m.media_url, m.media_mime, m.media_filename, m.ycloud_message_id, m.wamid,
-      m.reply_to_wamid, m.reactions, c.inbox_id
+      m.reply_to_wamid, m.reactions, m.rich_content, c.inbox_id
     FROM chatbase.messages m
     JOIN chatbase.conversations c ON c.id = m.conversation_id
     WHERE m.change_version > CAST(CAST(${cursor} AS bigint) AS binary(8))

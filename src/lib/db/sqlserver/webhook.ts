@@ -23,6 +23,7 @@ import {
   type PlannedContact,
   type StoredMessage,
 } from "../../ycloud/event-parser.ts";
+import { richFromMessage } from "../../ycloud/rich-content.ts";
 import type { Row } from "./connection.ts";
 import { failure, inTransaction, type SqlDb, type SqlResult } from "./db.ts";
 import { isUuid, raw, sql, type SqlFragment } from "./sql.ts";
@@ -65,6 +66,17 @@ function isUniqueViolation(err: unknown) {
 
 function json(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
+}
+
+/** Buttons and header the message carries. Templates get theirs from the text enrichment. */
+function richJson(envelope: Envelope): string | null {
+  const rich = richFromMessage(envelope.msg);
+  return rich ? JSON.stringify(rich) : null;
+}
+
+/** A status update repeats the message, or omits it: never clear what is stored. */
+function richAssignment(envelope: Envelope): SqlFragment {
+  return sql`rich_content = COALESCE(${richJson(envelope)}, rich_content)`;
 }
 
 async function recordEvent(
@@ -240,7 +252,7 @@ async function upsertInboundMessage(
   if (existing) {
     const patch = mergeInboundMessage(storedMessage(existing), envelope, content);
     await tx.run(sql`UPDATE chatbase.messages
-                     SET ${patchAssignments(patch)}, type = ${content.type}
+                     SET ${patchAssignments(patch)}, type = ${content.type}, ${richAssignment(envelope)}
                      WHERE id = ${existing.id as string}`);
     return;
   }
@@ -258,11 +270,13 @@ async function insertMessage(
 ) {
   await tx.run(sql`INSERT INTO chatbase.messages
                      (conversation_id, company_id, direction, type, body, ycloud_message_id, wamid, reply_to_wamid,
-                      status, raw_payload, media_url, media_mime, media_filename, media_sha256, created_at)
+                      status, raw_payload, media_url, media_mime, media_filename, media_sha256, created_at,
+                      rich_content)
                    VALUES (${conversationId}, ${companyId}, ${direction}, ${content.type}, ${content.body},
                            ${envelope.msgId}, ${envelope.wamid}, ${envelope.replyTo}, ${envelope.status},
                            ${json(envelope.msg)}, ${content.mediaUrl}, ${content.mediaMime},
-                           ${content.mediaFilename}, ${content.mediaSha256}, ${createdAt})`);
+                           ${content.mediaFilename}, ${content.mediaSha256}, ${createdAt},
+                           ${richJson(envelope)})`);
 }
 
 /** The first kanban column by position, unless the conversation is already in one. */
@@ -425,7 +439,7 @@ async function applyOutbound(tx: SqlDb, envelope: Envelope, clock: Clock): Promi
   if (matches.length > 0) {
     for (const match of matches) {
       const patch = mergeOutboundMessage(storedMessage(match), envelope, plan.content);
-      await tx.run(sql`UPDATE chatbase.messages SET ${patchAssignments(patch)}
+      await tx.run(sql`UPDATE chatbase.messages SET ${patchAssignments(patch)}, ${richAssignment(envelope)}
                        WHERE id = ${match.id as string}`);
     }
     return { ok: true, updated: true, wamid: envelope.wamid };
@@ -455,7 +469,7 @@ async function applyOutbound(tx: SqlDb, envelope: Envelope, clock: Clock): Promi
                          WHERE ycloud_message_id = ${envelope.msgId}`);
   if (conflict) {
     const patch = mergeOutboundMessage(storedMessage(conflict), envelope, plan.content);
-    await tx.run(sql`UPDATE chatbase.messages SET ${patchAssignments(patch)}
+    await tx.run(sql`UPDATE chatbase.messages SET ${patchAssignments(patch)}, ${richAssignment(envelope)}
                      WHERE id = ${conflict.id as string}`);
     return { ok: true, conversation_id: conversationId };
   }

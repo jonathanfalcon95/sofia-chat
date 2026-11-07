@@ -375,7 +375,7 @@ async function recreate() {
   const tables = await sqlRun(sql, "SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID('chatbase')");
   for (const { name } of tables) await sqlRun(sql, `DROP TABLE chatbase.${name}`);
   log(`eliminadas ${tables.length} tablas`);
-  for (const file of ["001_baseline.sql", "002_change_version.sql", "003_media_archive_index.sql"]) {
+  for (const file of ["001_baseline.sql", "002_change_version.sql", "003_media_archive_index.sql", "004_rich_content.sql"]) {
     const batches = readFileSync(new URL(`../../db/sqlserver/${file}`, import.meta.url), "utf8").split(/^\s*GO\s*$/m).map((b) => b.trim()).filter(Boolean);
     for (const batch of batches) await sqlRun(sql, batch);
     log(`aplicado ${file}`);

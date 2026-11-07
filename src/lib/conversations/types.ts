@@ -1,3 +1,5 @@
+import type { RichContent } from "@/lib/ycloud/rich-content";
+
 export type ContactTagRef = {
   tag_id: string;
   tags: { id: string; name: string; color: string } | null;
@@ -49,6 +51,8 @@ export type MessageRow = {
   wamid?: string | null;
   reply_to_wamid?: string | null;
   reactions?: MessageReaction[] | null;
+  /** Header and buttons of a template or interactive message. */
+  rich_content?: RichContent | null;
   /** Client-only blob URL for optimistic outbound media. */
   localPreviewUrl?: string | null;
 };
@@ -67,7 +71,7 @@ export const MESSAGE_PAGE_SIZE = 25;
 export const CONVERSATION_PAGE_SIZE = 50;
 
 export const MESSAGE_SELECT =
-  "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename, ycloud_message_id, wamid, reply_to_wamid, reactions";
+  "id, direction, type, body, status, created_at, template_name, conversation_id, media_url, media_mime, media_filename, ycloud_message_id, wamid, reply_to_wamid, reactions, rich_content";
 
 export const CONVERSATION_LIST_SELECT = `
   id, company_id, inbox_id, status, last_message_at, last_message_preview,

@@ -37,12 +37,13 @@ const MESSAGE_COLUMNS = [
   "wamid",
   "reply_to_wamid",
   "reactions",
+  "rich_content",
 ];
 
 const MESSAGES: WritableTable = {
   name: "chatbase.messages",
   columns: MESSAGE_COLUMNS,
-  json: ["template_components", "raw_payload", "reactions"],
+  json: ["template_components", "raw_payload", "reactions", "rich_content"],
   timestamps: ["created_at"],
 };
 

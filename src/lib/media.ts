@@ -39,6 +39,8 @@ export function mediaKindFromMime(mime: string): MediaKind | null {
 
 export function maxBytesForKind(kind: MediaKind, inbound = false): number {
   if (kind === "document" && inbound) return MEDIA_LIMITS.inboundDocument;
+  // 100 KB is what a business may send; stickers from contacts have arrived close to 1 MB.
+  if (kind === "sticker" && inbound) return MEDIA_LIMITS.image;
   return MEDIA_LIMITS[kind];
 }
 

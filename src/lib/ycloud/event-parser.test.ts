@@ -337,7 +337,11 @@ describe("content, on both paths", () => {
     ["empty text stays empty", { type: "text", text: { body: "" } }, ""],
     ["caption fallback", { type: "text", caption: "c" }, "c"],
     ["type defaults to text", { text: { body: "x" } }, "x"],
-    ["placeholder for unknown types", { type: "button" }, "[button]"],
+    ["interactive button reply", { type: "interactive", interactive: { type: "button_reply", button_reply: { id: "a", title: " Sí " } } }, "Sí"],
+    ["interactive list reply", { type: "interactive", interactive: { type: "list_reply", list_reply: { id: "1", title: "Margarita" } } }, "Margarita"],
+    ["template quick reply", { type: "button", button: { text: " Me interesa ", payload: "X" } }, "Me interesa"],
+    ["button with no text", { type: "button" }, "[button]"],
+    ["placeholder for unknown types", { type: "foo" }, "[foo]"],
     ["placeholder for no text", {}, "[text]"],
     ["numeric text", { type: "text", text: { body: 12 } }, "12"],
   ];
