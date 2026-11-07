@@ -346,7 +346,18 @@ function interactiveBody(content: unknown): string {
     nullIfEmpty(pgTrim(arrowText(parameters, "display_text"))) ?? "Abrir enlace";
   if (text !== "" && url !== null) return `${text}\n${display}: ${url}`;
   if (url !== null) return `${display}: ${url}`;
-  return text === "" ? "Mensaje interactivo" : text;
+  if (text !== "") return text;
+  // What the customer tapped, so the thread and the preview show it.
+  return (
+    nullIfEmpty(pgTrim(arrowText(arrow(interactive, "button_reply"), "title"))) ??
+    nullIfEmpty(pgTrim(arrowText(arrow(interactive, "list_reply"), "title"))) ??
+    "Mensaje interactivo"
+  );
+}
+
+/** A template quick reply: its text, or the `[button]` placeholder when it has none. */
+function buttonBody(content: unknown): string | null {
+  return nullIfEmpty(pgTrim(arrowText(arrow(content, "button"), "text")));
 }
 
 /** `jsonb_array_elements(coalesce(x, '[]'))`: a missing key is empty, any non-array raises. */
@@ -440,6 +451,8 @@ function specialBody(type: string, content: unknown, inbound: boolean): string |
   switch (type) {
     case "interactive":
       return interactiveBody(content);
+    case "button":
+      return buttonBody(content);
     case "contacts":
       return contactsBody(content);
     case "location":

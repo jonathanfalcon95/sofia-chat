@@ -10,6 +10,7 @@ const JSON_COLUMNS = new Set([
   "template_components",
   "raw_payload",
   "reactions",
+  "rich_content",
   "context",
   "payload",
 ]);

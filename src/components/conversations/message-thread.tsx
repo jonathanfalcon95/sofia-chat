@@ -15,6 +15,8 @@ import { WhatsAppText } from "@/components/conversations/whatsapp-text";
 import { MessageComposer } from "@/components/conversations/message-composer";
 import { MessageStatusIcon } from "@/components/conversations/message-status-icon";
 import { MessageMedia } from "@/components/conversations/message-media";
+import { RichMessage } from "@/components/conversations/rich-message";
+import { parseRichContent } from "@/lib/ycloud/rich-content";
 import {
   extractUrlFromBody,
   formatRevokedMessage,
@@ -26,6 +28,9 @@ import type { MessageRow } from "@/lib/conversations/types";
 import type { SofiaControlAction } from "@/components/conversations/sofia-commands-help";
 
 const REACTION_SET = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
+
+/** Types whose header and buttons live in rich_content. */
+const RICH_TYPES = new Set(["template", "interactive", "button"]);
 
 function isMedia(type: string) {
   return ["image", "audio", "video", "document", "sticker"].includes(type);
@@ -247,6 +252,9 @@ export function MessageThread({
                       !previous ||
                       previous.direction !== m.direction ||
                       isSpecialNoticeType(previous.type, previous.body);
+                    const rich = RICH_TYPES.has(m.type)
+                      ? parseRichContent(m.rich_content)
+                      : null;
                     const interactiveUrl =
                       m.type === "interactive" ? extractUrlFromBody(m.body) : null;
                     const quoted = m.reply_to_wamid
@@ -332,6 +340,8 @@ export function MessageThread({
                                 }
                               }}
                             />
+                          ) : rich ? (
+                            <RichMessage rich={rich} outbound={outbound} />
                           ) : m.type === "contacts" ? (
                             <div className="space-y-1">
                               <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">

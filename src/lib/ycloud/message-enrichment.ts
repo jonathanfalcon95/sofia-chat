@@ -10,9 +10,12 @@ import { getInboxYCloudCredentials } from "@/lib/ycloud/accounts";
 import { getWhatsAppTemplate } from "@/lib/ycloud/client";
 import { extractReplyText } from "@/lib/ycloud/inbound-message-display";
 import {
-  readSentTemplate,
-  renderTemplateText,
-} from "@/lib/ycloud/template-render";
+  richContentText,
+  richFromMessage,
+  richFromTemplate,
+  type RichContent,
+} from "@/lib/ycloud/rich-content";
+import { readSentTemplate } from "@/lib/ycloud/template-render";
 
 /**
  * Fills in text process_ycloud_event can't produce on its own: template bodies,
@@ -30,6 +33,8 @@ export type EnrichableMessage = {
 export type ResolvedText = {
   body: string;
   templateName?: string;
+  /** Header and buttons for the thread; messages.rich_content. */
+  rich?: RichContent;
   source: "template" | "template_fallback" | "reply";
 };
 
@@ -99,9 +104,10 @@ async function resolveTemplateText(
       name: sent.name,
       language: sent.language,
     });
-    const rendered = renderTemplateText(components, sent.components);
-    return rendered
-      ? { body: rendered, templateName: sent.name, source: "template" }
+    const rich = richFromTemplate(components, sent.components);
+    const rendered = rich ? richContentText(rich) : null;
+    return rich && rendered
+      ? { body: rendered, templateName: sent.name, rich, source: "template" }
       : fallback;
   } catch (err) {
     console.warn(
@@ -127,7 +133,8 @@ export async function resolveMessageText(
   if (!isReplyPlaceholder) return null;
 
   const reply = extractReplyText(message);
-  return reply ? { body: reply, source: "reply" } : null;
+  const rich = richFromMessage(message) ?? undefined;
+  return reply ? { body: reply, ...(rich ? { rich } : {}), source: "reply" } : null;
 }
 
 /** Writes only if the row still holds what was read, so nothing newer is lost. */
@@ -142,6 +149,7 @@ export async function applyResolvedText(
     const { error } = await updateMessageBodyIfUnchanged(db, row.id, row.body, {
       body: resolved.body,
       ...(resolved.templateName ? { template_name: resolved.templateName } : {}),
+      ...(resolved.rich ? { rich_content: resolved.rich } : {}),
     });
     if (error) throw new Error(error.message);
   }

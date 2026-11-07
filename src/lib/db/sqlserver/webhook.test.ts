@@ -116,7 +116,7 @@ describe("inbound", () => {
     const message = find(/INSERT INTO chatbase\.messages/)[0];
     assert.deepEqual(message.params, [
       "conv-1", "company-1", "inbound", "text", "hola", "m1", null, null, "received",
-      JSON.stringify(payload.whatsappInboundMessage), null, null, null, null, NOW_ISO,
+      JSON.stringify(payload.whatsappInboundMessage), null, null, null, null, NOW_ISO, null,
     ]);
 
     const order = statements.map((s) => /(INSERT INTO|UPDATE|FROM) chatbase\.(\w+)/.exec(s.text)?.[2]);
@@ -155,7 +155,9 @@ describe("inbound", () => {
     assert.equal(message.params[4], "u");
     assert.equal(message.params[8], "hola");
     assert.equal(message.params[9], "text");
-    assert.equal(message.params[10], "msg-1");
+    assert.match(message.text, /rich_content = COALESCE\(@p10, rich_content\)/);
+    assert.equal(message.params[10], null);
+    assert.equal(message.params[11], "msg-1");
     assert.equal(find(/INSERT INTO chatbase\.messages/).length, 0);
   });
 
@@ -343,7 +345,30 @@ describe("outbound", () => {
     const update = find(/UPDATE chatbase\.messages/)[0].params;
     assert.equal(update[0], "sent");
     assert.equal(update[8], "hola");
-    assert.equal(update[9], "a");
+    assert.equal(update[9], null);
+    assert.equal(update[10], "a");
+  });
+
+  test("a link button is stored with its rich content, and a status update keeps it", async () => {
+    const interactive = {
+      type: "cta_url",
+      body: { text: "Mira" },
+      action: { name: "cta_url", parameters: { display_text: "Ver", url: "https://example.com" } },
+    };
+    const rich = JSON.stringify({ kind: "interactive", body: "Mira", buttons: [{ kind: "url", text: "Ver", url: "https://example.com/" }] });
+
+    const inserted = fakeTx([INBOXES, NEW_CONTACT, NEW_CONVERSATION]);
+    await run(inserted.tx, UPDATED, outbound({ type: "interactive", interactive }));
+    const insert = inserted.find(/INSERT INTO chatbase\.messages/)[0];
+    assert.match(insert.text, /rich_content\)/);
+    assert.equal(insert.params[15], rich);
+
+    const stored = { id: "a", body: "Mira", wamid: "w1", reply_to_wamid: null, media_url: null, media_mime: null, media_filename: null, media_sha256: null, raw_payload: {} };
+    const updated = fakeTx([[/FROM chatbase\.messages WITH \(UPDLOCK\)/, [stored]]]);
+    await run(updated.tx, UPDATED, outbound({ wamid: "w1", status: "read" }));
+    const update = updated.find(/UPDATE chatbase\.messages/)[0];
+    assert.match(update.text, /rich_content = COALESCE\(@p9, rich_content\)/);
+    assert.equal(update.params[9], null);
   });
 
   test("the conversation takes createTime and the message sendTime", async () => {
@@ -357,7 +382,8 @@ describe("outbound", () => {
     const message = find(/INSERT INTO chatbase\.messages/)[0].params;
     assert.equal(message[2], "outbound");
     assert.equal(message[14], sendTime);
-    assert.equal(message.length, 15);
+    assert.equal(message[15], null);
+    assert.equal(message.length, 16);
   });
 
   test("with no times both are now", async () => {
